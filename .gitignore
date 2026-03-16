@@ -1,0 +1,30 @@
+# Build
+build/
+cmake-build-*/
+*.cmake
+*.o
+*.a
+*.so
+*.dylib
+*.dll
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.log
+
+# Debug
+*.gdb
+*.dSYM/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Keep the directory structure but ignore daily logs
+docs/memory/*.md
+!docs/memory/DEVNOTES.md
+!docs/memory/.gitkeep
