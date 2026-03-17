@@ -89,7 +89,7 @@ The `tools/` directory contains `browser_test.html` - a simple browser-based tes
 
 ```bash
 # Clone with all submodules (important, must add --recursive)
-# We use the mbedtls-2.28 branch (LTS maintenance branch) which is compatible.
+# We use the archive/mbedtls-2.28 branch (LTS maintenance branch) which is compatible.
 # mbedtls 3.x has incompatible API changes, we currently only support 2.28.
 #
 # .gitmodules already specifies the branch, so git clone will automatically checkout correct branch:
