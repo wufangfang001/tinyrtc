@@ -2,6 +2,10 @@
 
 A lightweight, WebRTC-compatible implementation written in pure GNU99 C, designed for portability across Linux and RTOS systems.
 
+> 🛠️ This project is **100% developed with [OpenClaw](https://github.com/openclaw/openclaw)** - an AI coding agent for collaborative software development.
+> 
+> We encourage other developers to continue developing this project using OpenClaw and welcome pull requests!
+
 ## Overview
 
 TinyRTC aims to provide a minimal, fully compatible WebRTC stack that can run on resource-constrained systems while maintaining interoperability with standard WebRTC implementations (like browsers).
@@ -83,14 +87,14 @@ The `tools/` directory contains `browser_test.html` - a simple browser-based tes
 ## Building
 
 ```bash
-# Clone with submodule
-git clone --recursive https://github.com/[username]/tinyrtc.git
+# Clone with all submodules (important, must add --recursive)
+git clone --recursive https://github.com/wufangfang001/tinyrtc.git
 cd tinyrtc
 
 # Build for Linux
 mkdir build && cd build
 cmake ..
-make
+make -j$(nproc)
 
 # Build for RTOS
 # Use your platform build system - just compile the .c files and link with AOSL
