@@ -19,11 +19,13 @@
 #include <mbedtls/x509_crt.h>
 #include <mbedtls/pk.h>
 
-/* mbedtls 2.x has sha256.h directly, 3.x has it under psa/crypto.h but still keeps the old header */
-#if defined(MBEDTLS_SHA256_C)
+/* Try multiple locations for compatibility between mbedtls 2.x and 3.x */
+#if __has_include(<mbedtls/sha256.h>)
 #include <mbedtls/sha256.h>
-#else
+#elif __has_include(<psa/crypto.h>)
 #include <psa/crypto.h>
+#else
+#include <mbedtls/sha256.h>
 #endif
 
 #ifdef __cplusplus

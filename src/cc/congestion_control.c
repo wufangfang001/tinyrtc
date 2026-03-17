@@ -132,7 +132,10 @@ void tinyrtc_cc_report_packet_sent(
     uint64_t send_time_ms,
     size_t size_bytes)
 {
-    TINYRTC_CHECK_NULL(cc);
+    if (cc == NULL) {
+        TINYRTC_LOG_ERROR("cc_report_packet_sent: NULL pointer");
+        return;
+    }
 
     TINYRTC_UNUSED(sequence_number);
     TINYRTC_UNUSED(timestamp);
@@ -156,7 +159,10 @@ void tinyrtc_cc_report_feedback(
     uint64_t total_bytes,
     uint32_t total_packets)
 {
-    TINYRTC_CHECK_NULL(cc);
+    if (cc == NULL) {
+        TINYRTC_LOG_ERROR("cc_report_feedback: NULL pointer");
+        return;
+    }
     TINYRTC_UNUSED(sequence_number);
     TINYRTC_UNUSED(timestamp);
     TINYRTC_UNUSED(receive_time_ms);
