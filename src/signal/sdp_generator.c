@@ -97,9 +97,9 @@ tinyrtc_error_t sdp_generate(const sdp_session_t *session, char **out_text)
         SDP_APPEND_LINE(buf, buf_size, offset, "m=%s %d RTP/SAVPF %d",
             media_name, media->port, payload);
 
-        /* a=rtpmap:payload codec clock-rate */
-        SDP_APPEND_LINE(buf, buf_size, offset, "a=rtpmap:%d %s %u",
-            payload, codec_name, media->clock_rate);
+        /* a=rtpmap:payload codec clock-rate/channels */
+        SDP_APPEND_LINE(buf, buf_size, offset, "a=rtpmap:%d %s %u/%d",
+            payload, codec_name, media->clock_rate, media->channels);
 
         /* a=mid:... */
         if (media->mid[0] != '\0') {

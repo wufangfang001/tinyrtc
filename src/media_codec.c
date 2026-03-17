@@ -20,16 +20,17 @@ typedef struct {
     const char *name;
     int default_payload;
     uint32_t clock_rate;
+    int channels;
 } codec_info_t;
 
 static const codec_info_t codec_info_table[] = {
     /* Video codecs */
-    { TINYRTC_CODEC_H264, "H264", 100, 90000 },
+    { TINYRTC_CODEC_H264, "H264", 100, 90000, 1 },
 
     /* Audio codecs */
-    { TINYRTC_CODEC_OPUS, "OPUS", 111, 48000 },
-    { TINYRTC_CODEC_PCMA, "PCMA", 8, 8000 },
-    { TINYRTC_CODEC_PCMU, "PCMU", 0, 8000 },
+    { TINYRTC_CODEC_OPUS, "OPUS", 111, 48000, 2 },
+    { TINYRTC_CODEC_PCMA, "PCMA", 8, 8000, 1 },
+    { TINYRTC_CODEC_PCMU, "PCMU", 0, 8000, 1 },
 };
 
 /* =============================================================================
@@ -75,4 +76,13 @@ uint32_t tinyrtc_codec_get_clock_rate(tinyrtc_codec_id_t codec)
         return 0;
     }
     return info->clock_rate;
+}
+
+int tinyrtc_codec_get_channels(tinyrtc_codec_id_t codec)
+{
+    const codec_info_t *info = find_codec_info(codec);
+    if (info == NULL) {
+        return 1;
+    }
+    return info->channels;
 }

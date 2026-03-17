@@ -62,6 +62,7 @@ typedef struct {
     tinyrtc_codec_id_t codec_id;  /**< Codec ID */
     int payload_type;      /**< RTP payload type (0=use default from codec) */
     uint32_t clock_rate;   /**< RTP clock rate (0=use default from codec) */
+    int channels;          /**< Number of audio channels (0=use default from codec) */
 } tinyrtc_track_config_t;
 
 /**

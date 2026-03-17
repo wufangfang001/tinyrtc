@@ -44,6 +44,7 @@ typedef struct {
     int payload_type;                   /* RTP payload type */
     tinyrtc_codec_id_t codec_id;        /* Codec ID */
     uint32_t clock_rate;                /* RTP clock rate */
+    int channels;                       /* Number of audio channels */
     char mid[16];                       /* Media identification */
     bool direction_send;                /* We send */
     bool direction_recv;                /* We receive */

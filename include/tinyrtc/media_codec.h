@@ -51,6 +51,14 @@ const char *tinyrtc_codec_get_name(tinyrtc_codec_id_t codec);
  */
 uint32_t tinyrtc_codec_get_clock_rate(tinyrtc_codec_id_t codec);
 
+/**
+ * @brief Get number of channels for a codec
+ *
+ * @param codec Codec ID
+ * @return Number of audio channels (1=mono, 2=stereo)
+ */
+int tinyrtc_codec_get_channels(tinyrtc_codec_id_t codec);
+
 #ifdef __cplusplus
 }
 #endif

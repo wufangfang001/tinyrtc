@@ -376,6 +376,11 @@ int sdp_add_media(sdp_session_t *session, const tinyrtc_track_config_t *track_co
     } else {
         media->clock_rate = tinyrtc_codec_get_clock_rate(track_config->codec_id);
     }
+    if (track_config->channels != 0) {
+        media->channels = track_config->channels;
+    } else {
+        media->channels = tinyrtc_codec_get_channels(track_config->codec_id);
+    }
     media->codec_id = track_config->codec_id;
     media->port = 9; /* 9 is used for SDP when port is not known yet */
     strncpy(media->mid, track_config->mid, sizeof(media->mid) - 1);
