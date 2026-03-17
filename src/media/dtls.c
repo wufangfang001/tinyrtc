@@ -24,7 +24,9 @@
 #elif __has_include(<psa/crypto.h>)
 #include "psa/crypto.h"
 #include "mbedtls/ssl.h"
+#if __has_include(<mbedtls/entropy_poll.h>)
 #include "mbedtls/entropy_poll.h"
+#endif
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/ecp.h"
 #include "mbedtls/ecdh.h"
