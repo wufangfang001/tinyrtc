@@ -15,18 +15,10 @@
 #include "common.h"
 #include "ice_internal.h"
 
-/* mbedtls 2.x vs 3.x compatibility */
-#if __has_include(<psa/crypto.h>)
-#include <psa/crypto.h>
-#endif
 #include <mbedtls/ssl.h>
 #include <mbedtls/x509_crt.h>
 #include <mbedtls/pk.h>
-
-/* Try multiple locations for sha256 */
-#if __has_include(<mbedtls/sha256.h>)
 #include <mbedtls/sha256.h>
-#endif
 
 #ifdef __cplusplus
 extern "C" {

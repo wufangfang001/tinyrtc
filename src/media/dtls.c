@@ -12,29 +12,21 @@
 #include "common.h"
 #include "dtls_srtp_internal.h"
 
-/* mbedtls 2.x vs 3.x compatibility */
-#if __has_include(<psa/crypto.h>)
-#include "psa/crypto.h"
-#endif
-#if __has_include(<mbedtls/entropy.h>)
 #include "mbedtls/entropy.h"
-#endif
-#if __has_include(<mbedtls/ctr_drbg.h>)
 #include "mbedtls/ctr_drbg.h"
-#endif
 #include "mbedtls/ssl.h"
-#if __has_include(<mbedtls/entropy_poll.h>)
 #include "mbedtls/entropy_poll.h"
-#endif
-#if __has_include(<mbedtls/x509_crt.h>)
 #include "mbedtls/x509_crt.h"
-#endif
-#if __has_include(<mbedtls/ecp.h>)
 #include "mbedtls/ecp.h"
-#endif
-#if __has_include(<mbedtls/ecdh.h>)
 #include "mbedtls/ecdh.h"
-#endif
+
+/* 
+ * NOTE: TinyRTC currently uses mbedtls 2.28.10 LTS.
+ * mbedtls 3.x has incompatible API changes that require significant refactoring.
+ * If you get compilation errors, make sure you've checked out the correct branch:
+ * 
+ *   cd third_party/mbedtls && git checkout mbedtls-2.28.10
+ */
 
 /* =============================================================================
  * Static global context for mbedtls
