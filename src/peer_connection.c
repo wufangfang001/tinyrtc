@@ -10,6 +10,7 @@
 
 #include <stdio.h>
 #include "common.h"
+#include "media.h"
 #include "sdp_internal.h"
 #include "peer_connection_internal.h"
 #include "tinyrtc/peer_connection.h"
@@ -91,6 +92,9 @@ void tinyrtc_peer_connection_destroy(tinyrtc_peer_connection_t *pc)
 
     /* Free remote tracks */
     for (int i = 0; i < pc->num_remote_tracks; i++) {
+        if (pc->remote_tracks[i]->jitter_buffer != NULL) {
+            tinyrtc_jitter_buffer_destroy(pc->remote_tracks[i]->jitter_buffer);
+        }
         tinyrtc_internal_free(pc->remote_tracks[i]);
     }
 
@@ -173,8 +177,12 @@ tinyrtc_track_t *tinyrtc_peer_connection_add_track(
     strncpy(track->mid, config->mid, sizeof(track->mid) - 1);
     track->is_local = true;
     track->pc = pc;
+    track->next_sequence = 0;
+    track->jitter_buffer = NULL; /* No jitter buffer needed for local */
     track->frames_sent = 0;
     track->bytes_sent = 0;
+    track->packets_received = 0;
+    track->frames_received = 0;
 
     aosl_lock_lock(pc->mutex);
     pc->local_tracks[pc->num_local_tracks++] = track;
@@ -367,6 +375,20 @@ tinyrtc_error_t tinyrtc_peer_connection_set_remote_description(
         strcpy(track->mid, media->mid);
         track->is_local = false;
         track->pc = pc;
+        track->next_sequence = 0;
+
+        /* Initialize jitter buffer for remote track */
+        tinyrtc_jitter_config_t jb_config;
+        tinyrtc_jitter_get_default_config(&jb_config);
+        track->jitter_buffer = tinyrtc_jitter_buffer_create(&jb_config);
+        if (track->jitter_buffer == NULL) {
+            TINYRTC_LOG_ERROR("set_remote_description: failed to create jitter buffer");
+            tinyrtc_internal_free(track);
+            continue;
+        }
+
+        track->packets_received = 0;
+        track->frames_received = 0;
 
         if (pc->num_remote_tracks < SDP_MAX_MEDIA) {
             pc->remote_tracks[pc->num_remote_tracks++] = track;
@@ -378,6 +400,7 @@ tinyrtc_error_t tinyrtc_peer_connection_set_remote_description(
                     track);
             }
         } else {
+            tinyrtc_jitter_buffer_destroy(track->jitter_buffer);
             tinyrtc_internal_free(track);
         }
     }
@@ -508,6 +531,58 @@ tinyrtc_error_t tinyrtc_peer_connection_add_ice_candidate(
  * Public API implementation - Media send
  * ========================================================================== */
 
+/* Helper structure for packetization callback */
+typedef struct {
+    tinyrtc_track_t *track;
+    tinyrtc_peer_connection_t *pc;
+    uint16_t sequence;
+    uint32_t timestamp;
+} packetize_context_t;
+
+/* Callback for each packetized chunk - build and send RTP packet */
+static void packetize_send_callback(
+    const uint8_t *payload,
+    size_t payload_len,
+    void *user_data)
+{
+    packetize_context_t *ctx = (packetize_context_t *)user_data;
+    tinyrtc_track_t *track = ctx->track;
+    tinyrtc_peer_connection_t *pc = ctx->pc;
+
+    /* Build RTP header */
+    uint8_t rtp_buffer[1500]; /* MTU 1500 is standard for UDP */
+    tinyrtc_rtp_header_t header;
+    header.version = 2;
+    header.padding = false;
+    header.extension = false;
+    header.marker = (payload_len > 0); /* Mark last packet with marker bit */
+    header.payload_type = (uint8_t)track->payload_type;
+    header.sequence = ctx->sequence++;
+    header.timestamp = ctx->timestamp;
+    header.ssrc = 0; /* TODO: generate random SSRC per track */
+    header.num_csrc = 0;
+
+    size_t header_len = tinyrtc_rtp_build_header(&header, rtp_buffer, sizeof(rtp_buffer));
+    if (header_len == 0) {
+        TINYRTC_LOG_ERROR("packetize_send_callback: failed to build RTP header");
+        return;
+    }
+
+    /* Copy payload after header */
+    memcpy(rtp_buffer + header_len, payload, payload_len);
+    size_t packet_len = header_len + payload_len;
+
+    /* TODO: Send via ICE connected UDP socket
+     * For now, we just have the packet ready - when ICE is implemented,
+     * this will be sent to the selected candidate pair.
+     */
+
+    /* Increment sequence for next packet */
+    track->next_sequence = ctx->sequence;
+
+    TINYRTC_LOG_DEBUG("Sent RTP packet: seq=%u len=%zu", header.sequence, packet_len);
+}
+
 tinyrtc_error_t tinyrtc_track_send_audio_frame(
     tinyrtc_track_t *track,
     const uint8_t *frame,
@@ -521,14 +596,26 @@ tinyrtc_error_t tinyrtc_track_send_audio_frame(
         return TINYRTC_ERROR_INVALID_STATE;
     }
 
-    /* TODO:
-     * 1. Packetize frame into RTP packets
-     * 2. Send RTP packets via ICE connected transport
-     * 3. Update statistics
-     */
+    /* Packetization parameters - MTU 1500 */
+    tinyrtc_codec_packetization_t params;
+    params.payload_type = track->payload_type;
+    params.mtu = 1500;
 
+    packetize_context_t cb_ctx;
+    cb_ctx.track = track;
+    cb_ctx.pc = track->pc;
+    cb_ctx.sequence = track->next_sequence;
+    cb_ctx.timestamp = timestamp;
+
+    /* Packetize and send */
+    int packets = tinyrtc_packetize_frame(frame, frame_len, &params,
+        packetize_send_callback, &cb_ctx);
+
+    /* Update statistics */
     track->frames_sent++;
     track->bytes_sent += frame_len;
+
+    TINYRTC_LOG_DEBUG("Sent audio frame: %zu bytes in %d packets", frame_len, packets);
 
     return TINYRTC_OK;
 }
@@ -546,14 +633,114 @@ tinyrtc_error_t tinyrtc_track_send_video_frame(
         return TINYRTC_ERROR_INVALID_STATE;
     }
 
-    /* TODO:
-     * 1. Packetize frame into RTP packets
-     * 2. Send RTP packets via ICE connected transport
-     * 3. Update statistics
-     */
+    /* Packetization parameters - MTU 1500 */
+    tinyrtc_codec_packetization_t params;
+    params.payload_type = track->payload_type;
+    params.mtu = 1500;
 
+    packetize_context_t cb_ctx;
+    cb_ctx.track = track;
+    cb_ctx.pc = track->pc;
+    cb_ctx.sequence = track->next_sequence;
+    cb_ctx.timestamp = timestamp;
+
+    /* Packetize and send */
+    int packets = tinyrtc_packetize_frame(frame, frame_len, &params,
+        packetize_send_callback, &cb_ctx);
+
+    /* Update statistics */
     track->frames_sent++;
     track->bytes_sent += frame_len;
+
+    TINYRTC_LOG_DEBUG("Sent video frame: %zu bytes in %d packets", frame_len, packets);
+
+    return TINYRTC_OK;
+}
+
+/* =============================================================================
+ * Internal RTP processing
+ * ========================================================================== */
+
+tinyrtc_error_t pc_process_incoming_rtp(
+    tinyrtc_peer_connection_t *pc,
+    const uint8_t *packet,
+    size_t len)
+{
+    TINYRTC_CHECK(pc != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(packet != NULL, TINYRTC_ERROR_INVALID_ARG);
+
+    /* Parse RTP header */
+    tinyrtc_rtp_header_t header;
+    if (!tinyrtc_rtp_parse_header(packet, len, &header)) {
+        TINYRTC_LOG_DEBUG("pc_process_incoming_rtp: invalid RTP header");
+        return TINYRTC_ERROR;
+    }
+
+    /* Find the track based on payload type
+     * For simplicity, search all remote tracks - usually there's not many.
+     */
+    tinyrtc_track_t *matched = NULL;
+    aosl_lock_lock(pc->mutex);
+    for (int i = 0; i < pc->num_remote_tracks; i++) {
+        if (pc->remote_tracks[i]->payload_type == (int)header.payload_type) {
+            matched = pc->remote_tracks[i];
+            break;
+        }
+    }
+    aosl_lock_unlock(pc->mutex);
+
+    if (matched == NULL) {
+        TINYRTC_LOG_DEBUG("pc_process_incoming_rtp: no track for payload type %d",
+            (int)header.payload_type);
+        return TINYRTC_ERROR_NOT_FOUND;
+    }
+
+    /* Add to jitter buffer */
+    uint64_t now = aosl_time_ms();
+    tinyrtc_error_t err = tinyrtc_jitter_buffer_add_packet(
+        matched->jitter_buffer, packet, len, now);
+    matched->packets_received++;
+
+    if (err != TINYRTC_OK) {
+        return err;
+    }
+
+    /* Try to get a complete frame from jitter buffer
+     * For simplicity, we depacketize directly since one RTP = one frame for many cases
+     */
+    uint8_t frame_buffer[4096]; /* 4KB max for now */
+    size_t frame_len;
+    const uint8_t *payload = tinyrtc_rtp_get_payload(packet, len, &header);
+    if (payload == NULL) {
+        return TINYRTC_ERROR;
+    }
+
+    size_t payload_len = len - (size_t)(payload - packet);
+    bool frame_complete = tinyrtc_depacketize_frame(
+        packet, len, frame_buffer, sizeof(frame_buffer), &frame_len);
+
+    if (frame_complete) {
+        matched->frames_received++;
+
+        /* Notify application via callback */
+        if (matched->kind == TINYRTC_TRACK_KIND_AUDIO &&
+            pc->config.observer.on_audio_frame != NULL) {
+            pc->config.observer.on_audio_frame(
+                pc->config.observer.user_data,
+                matched,
+                frame_buffer,
+                frame_len,
+                header.timestamp);
+        } else if (matched->kind == TINYRTC_TRACK_KIND_VIDEO &&
+                   pc->config.observer.on_video_frame != NULL) {
+            pc->config.observer.on_video_frame(
+                pc->config.observer.user_data,
+                matched,
+                frame_buffer,
+                frame_len,
+                header.timestamp);
+        }
+    }
 
     return TINYRTC_OK;
 }

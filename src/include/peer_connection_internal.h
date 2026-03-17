@@ -35,9 +35,17 @@ struct tinyrtc_track {
     bool is_local;            /* true = local track, false = remote */
     tinyrtc_peer_connection_t *pc; /* Back reference to parent */
 
+    /* For sending: sequence number state */
+    uint16_t next_sequence;
+
+    /* For receiving: jitter buffer */
+    tinyrtc_jitter_buffer_t *jitter_buffer;
+
     /* Statistics */
     uint64_t frames_sent;
     uint64_t bytes_sent;
+    uint64_t packets_received;
+    uint64_t frames_received;
 };
 
 /* =============================================================================
@@ -131,6 +139,21 @@ tinyrtc_error_t pc_process_remote_offer(tinyrtc_peer_connection_t *pc,
  */
 tinyrtc_error_t pc_set_remote_description(tinyrtc_peer_connection_t *pc,
                                             const sdp_session_t *remote);
+
+/**
+ * @brief Process incoming RTP packet from network
+ *
+ * This is called internally by ICE when a RTP packet is received.
+ *
+ * @param pc Peer connection
+ * @param packet Packet data
+ * @param len Packet length
+ * @return TINYRTC_OK on success
+ */
+tinyrtc_error_t pc_process_incoming_rtp(
+    tinyrtc_peer_connection_t *pc,
+    const uint8_t *packet,
+    size_t len);
 
 #ifdef __cplusplus
 }

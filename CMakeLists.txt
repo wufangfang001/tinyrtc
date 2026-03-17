@@ -59,12 +59,19 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/aosl/platform/include
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/aosl/platform/src/${CONFIG_PLATFORM}/config
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/aosl/platform/src/${CONFIG_PLATFORM}/config/hal
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls/include
 )
 
 # Add AOSL subdirectory - we are the main project, AOSL doesn't need to declare itself
 # but we still need it to create the library, which is handled in build.cmake now
 set(AOSL_DECLARE_PROJECT OFF CACHE INTERNAL "AOSL doesn't declare project when built as subdirectory")
 add_subdirectory(third_party/aosl)
+
+# Add mbedTLS subdirectory - use the submodule version instead of system
+set(ENABLE_TESTING OFF CACHE INTERNAL "Disable mbedtls testing")
+set(ENABLE_PROGRAMS OFF CACHE INTERNAL "Disable mbedtls programs")
+set(MBEDTLS_FATAL_WARNINGS OFF CACHE INTERNAL "Disable fatal warnings")
+add_subdirectory(third_party/mbedtls)
 
 # Collect source files
 file(GLOB_RECURSE TINYRTC_SOURCES
@@ -76,8 +83,7 @@ add_library(tinyrtc STATIC ${TINYRTC_SOURCES})
 target_link_libraries(tinyrtc aosl)
 
 # DTLS/SRTP requires mbedTLS for crypto operations (lightweight, portable)
-include_directories(/usr/include)
-target_link_directories(tinyrtc PRIVATE /usr/lib/x86_64-linux-gnu)
+# Use the submodule version now instead of system libraries
 target_link_libraries(tinyrtc mbedtls mbedx509 mbedcrypto)
 
 # Build examples if enabled

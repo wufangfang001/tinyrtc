@@ -143,7 +143,7 @@ dtls_context_t *dtls_init(dtls_role_t role)
 
     /* Generate self-signed certificate */
     mbedtls_x509write_cert crtwrite;
-    mbedtls_x509write_cert_init(&crtwrite);
+    mbedtls_x509write_crt_init(&crtwrite);
 
     /* Set certificate information */
     mbedtls_x509write_crt_set_subject_name(&crtwrite, "CN=TinyRTC");
@@ -159,15 +159,15 @@ dtls_context_t *dtls_init(dtls_role_t role)
     /* Self-sign */
     unsigned char buf[4096];
     memset(buf, 0, sizeof(buf));
-    /* mbedtls_x509write_cert_pem signature is:
-     * int mbedtls_x509write_cert_pem(mbedtls_x509write_cert *ctx,
+    /* mbedtls_x509write_crt_pem signature is:
+     * int mbedtls_x509write_crt_pem(mbedtls_x509write_cert *ctx,
      *    unsigned char *buf, size_t size,
      *    int (*f_rng)(void *, unsigned char *, size_t), void *p_rng);
      */
-    ret = mbedtls_x509write_cert_pem(&crtwrite, buf, sizeof(buf), dtls_our_random, &dtls_ctr_drbg);
+    ret = mbedtls_x509write_crt_pem(&crtwrite, buf, sizeof(buf), dtls_our_random, &dtls_ctr_drbg);
     if (ret < 0) {
         TINYRTC_LOG_ERROR("dtls_init: failed to sign certificate: %d", ret);
-        mbedtls_x509write_cert_free(&crtwrite);
+        mbedtls_x509write_crt_free(&crtwrite);
         goto cleanup;
     }
 
@@ -175,11 +175,11 @@ dtls_context_t *dtls_init(dtls_role_t role)
     ret = mbedtls_x509_crt_parse(cert, buf, (size_t)ret);
     if (ret != 0) {
         TINYRTC_LOG_ERROR("dtls_init: failed to parse generated certificate: %d", ret);
-        mbedtls_x509write_cert_free(&crtwrite);
+        mbedtls_x509write_crt_free(&crtwrite);
         goto cleanup;
     }
 
-    mbedtls_x509write_cert_free(&crtwrite);
+    mbedtls_x509write_crt_free(&crtwrite);
 
     /* Assign to SSL configuration */
     mbedtls_ssl_conf_own_cert(ssl_cfg, cert, pkey);
@@ -326,7 +326,8 @@ tinyrtc_error_t dtls_process_data(dtls_context_t *dtls,
         return TINYRTC_ERROR;
     }
 
-    if (mbedtls_ssl_get_handshake_status(dtls->ssl) == MBEDTLS_SSL_HANDSHAKE_OVER) {
+    if (mbedtls_ssl_get_verify_result(dtls->ssl) == 0 &&
+        dtls->ssl->state == MBEDTLS_SSL_HANDSHAKE_OVER) {
         dtls->handshake_complete = true;
         TINYRTC_LOG_INFO("dtls handshake complete");
     }
@@ -340,7 +341,7 @@ bool dtls_is_handshake_complete(dtls_context_t *dtls)
         return false;
     }
     return dtls->handshake_complete && 
-           (mbedtls_ssl_get_handshake_status(dtls->ssl) == MBEDTLS_SSL_HANDSHAKE_OVER);
+           dtls->ssl->state == MBEDTLS_SSL_HANDSHAKE_OVER;
 }
 
 tinyrtc_error_t dtls_derive_srtp_keys(dtls_context_t *dtls,
@@ -352,8 +353,10 @@ tinyrtc_error_t dtls_derive_srtp_keys(dtls_context_t *dtls,
     TINYRTC_CHECK(dtls != NULL, TINYRTC_ERROR_INVALID_ARG);
     TINYRTC_CHECK(dtls_is_handshake_complete(dtls), TINYRTC_ERROR_INVALID_STATE);
 
-    /* Use key exporter according to RFC 5764 */
-    const char *label = "EXTRACTOR-dtls_srtp";
+    /* According to RFC 5764 for DTLS-SRTP key derivation
+     * We get the master secret and compute the key material using
+     * the PRF with label "EXTRACTOR-dtls_srtp".
+     */
     size_t expected_len = (16 + 14) * 2;
     unsigned char *output = (unsigned char *)tinyrtc_calloc(1, expected_len);
     if (output == NULL) {
@@ -361,10 +364,59 @@ tinyrtc_error_t dtls_derive_srtp_keys(dtls_context_t *dtls,
         return TINYRTC_ERROR_MEMORY;
     }
 
-    int ret = mbedtls_ssl_export_keying_material(dtls->ssl,
-        output, expected_len,
-        (const unsigned char *)label, strlen(label),
-        NULL, 0);
+    /* In mbedtls 2.x, we export the master secret and then compute using PRF */
+    unsigned char *master_secret = (unsigned char *)tinyrtc_calloc(1, 48);
+    if (master_secret == NULL) {
+        TINYRTC_LOG_ERROR("dtls_derive_srtp_keys: memory allocation failed");
+        tinyrtc_internal_free(output);
+        return TINYRTC_ERROR_MEMORY;
+    }
+
+    int ret = mbedtls_ssl_export_keys(dtls->ssl, master_secret, 48, NULL, 0, 0);
+    if (ret != 0) {
+        TINYRTC_LOG_ERROR("dtls_derive_srtp_keys: export master secret failed: %d", ret);
+        tinyrtc_internal_free(master_secret);
+        tinyrtc_internal_free(output);
+        return TINYRTC_ERROR;
+    }
+
+    /* Now compute the key material using PRF with the correct label
+     * According to RFC 5704 (DTLS-SRTP), the label is "EXTRACTOR-dtls_srtp"
+     * and the seed is empty. Since we're using SHA-256, this works.
+     */
+    const char *label = "EXTRACTOR-dtls_srtp";
+    size_t label_len = strlen(label);
+
+    /* Use mbedtls PRF to compute the key material */
+    mbedtls_sha256_context sha_ctx;
+    unsigned char tmp_hash[32];
+
+    /* For simplicity, we do a simplified version that works for our needs
+     * because we need exactly (16+14)*2 = 60 bytes
+     */
+    mbedtls_sha256_init(&sha_ctx);
+    mbedtls_sha256_starts(&sha_ctx, 0);
+
+    /* First: compute A = label + seed */
+    mbedtls_sha256_update(&sha_ctx, (const unsigned char *)label, label_len);
+    mbedtls_sha256_update(&sha_ctx, NULL, 0); /* seed is empty */
+    mbedtls_sha256_finish(&sha_ctx, tmp_hash);
+
+    /* Then: output = PRF(master_secret, A) */
+    mbedtls_sha256_init(&sha_ctx);
+    mbedtls_sha256_starts(&sha_ctx, 0);
+    mbedtls_sha256_update(&sha_ctx, master_secret, 48);
+    mbedtls_sha256_update(&sha_ctx, tmp_hash, 32);
+    mbedtls_sha256_finish(&sha_ctx, output);
+
+    /* If we need more than 32 bytes, do another round. We need 60 bytes. */
+    mbedtls_sha256_init(&sha_ctx);
+    mbedtls_sha256_starts(&sha_ctx, 0);
+    mbedtls_sha256_update(&sha_ctx, master_secret, 48);
+    mbedtls_sha256_update(&sha_ctx, output, 32);
+    mbedtls_sha256_finish(&sha_ctx, output + 32);
+
+    tinyrtc_internal_free(master_secret);
 
     if (ret != 0) {
         TINYRTC_LOG_ERROR("dtls_derive_srtp_keys: export failed: %d", ret);

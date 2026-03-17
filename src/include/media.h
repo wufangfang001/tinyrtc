@@ -7,7 +7,7 @@
 #define TINYRTC_MEDIA_H
 
 #include "tinyrtc/tinyrtc.h"
-#include "peer_connection.h"
+#include "tinyrtc/peer_connection.h"
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -73,10 +73,7 @@ typedef struct {
 void tinyrtc_jitter_get_default_config(tinyrtc_jitter_config_t *config);
 
 /**
- * @brief Initialize jitter buffer
- *
- * @param config Jitter configuration
- * @return Jitter buffer handle
+ * @brief Jitter buffer handle
  */
 typedef struct tinyrtc_jitter_buffer tinyrtc_jitter_buffer_t;
 
@@ -87,7 +84,7 @@ typedef struct tinyrtc_jitter_buffer tinyrtc_jitter_buffer_t;
  * @return New jitter buffer
  */
 tinyrtc_jitter_buffer_t *tinyrtc_jitter_buffer_create(
-    const tinyrtc_jitter_buffer_t *config);
+    const tinyrtc_jitter_config_t *config);
 
 /**
  * @brief Destroy jitter buffer
@@ -158,7 +155,7 @@ bool tinyrtc_rtp_parse_header(
  * @return Number of bytes written, 0 on error
  */
 size_t tinyrtc_rtp_build_header(
-    const tinyrtc_rtp_parser_t *header,
+    const tinyrtc_rtp_header_t *header,
     uint8_t *buffer,
     size_t max_len);
 
@@ -275,7 +272,7 @@ typedef void (*tinyrtc_packet_callback_t)(
 int tinyrtc_packetize_frame(
     const uint8_t *frame,
     size_t frame_len,
-    const tinyrtc_packetization_t *params,
+    const tinyrtc_codec_packetization_t *params,
     tinyrtc_packet_callback_t callback,
     void *user_data);
 

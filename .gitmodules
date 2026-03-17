@@ -1,3 +1,6 @@
 [submodule "third_party/aosl"]
 	path = third_party/aosl
 	url = https://github.com/AgoraIO-Community/aosl
+[submodule "third_party/mbedtls"]
+	path = third_party/mbedtls
+	url = https://github.com/ARMmbed/mbedtls.git
