@@ -1,5 +1,11 @@
 # Demo applications CMakeLists
 
+# Add link directories for subproject libraries on older CMake/GCC
+link_directories(
+    ${CMAKE_CURRENT_BINARY_DIR}/../third_party/aosl
+    ${CMAKE_CURRENT_BINARY_DIR}/../third_party/mbedtls/library
+)
+
 # Common utilities
 add_library(demo_common STATIC common.c)
 target_link_libraries(demo_common PUBLIC tinyrtc aosl)

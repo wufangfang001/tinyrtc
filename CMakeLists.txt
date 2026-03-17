@@ -73,6 +73,12 @@ set(ENABLE_PROGRAMS OFF CACHE INTERNAL "Disable mbedtls programs")
 set(MBEDTLS_FATAL_WARNINGS OFF CACHE INTERNAL "Disable fatal warnings")
 add_subdirectory(third_party/mbedtls)
 
+# Add link directories for subproject libraries on older CMake/GCC
+link_directories(
+    ${CMAKE_CURRENT_BINARY_DIR}/third_party/aosl
+    ${CMAKE_CURRENT_BINARY_DIR}/third_party/mbedtls/library
+)
+
 # Collect source files
 file(GLOB_RECURSE TINYRTC_SOURCES
     "src/*.c"
