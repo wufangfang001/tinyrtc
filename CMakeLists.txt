@@ -62,20 +62,95 @@ include_directories(
     ${CMAKE_CURRENT_SOURCE_DIR}/third_party/mbedtls/include
 )
 
-# Add AOSL subdirectory - we are the main project, AOSL doesn't need to declare itself
-# but we still need it to create the library, which is handled in build.cmake now
-set(AOSL_DECLARE_PROJECT OFF CACHE INTERNAL "AOSL doesn't declare project when built as subdirectory")
-add_subdirectory(third_party/aosl)
-
 # Add mbedTLS subdirectory - use the submodule version instead of system
 set(ENABLE_TESTING OFF CACHE INTERNAL "Disable mbedtls testing")
 set(ENABLE_PROGRAMS OFF CACHE INTERNAL "Disable mbedtls programs")
 set(MBEDTLS_FATAL_WARNINGS OFF CACHE INTERNAL "Disable fatal warnings")
 add_subdirectory(third_party/mbedtls)
 
+# Build AOSL directly here for compatibility with older CMake
+set(AOSL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/third_party/aosl")
+set(AOSL_ADD_INCLUDES_PUBLIC
+    "${AOSL_DIR}/include"
+    "${AOSL_DIR}/platform/include"
+    "${AOSL_DIR}/platform/src/${CONFIG_PLATFORM}/config"
+)
+
+# Platform sources
+file(GLOB AOSL_PLATFORM_SRCS "${AOSL_DIR}/platform/src/${CONFIG_PLATFORM}/*.c")
+set(AOSL_ADD_SOURCES ${AOSL_PLATFORM_SRCS})
+
+# Core sources
+list(APPEND AOSL_ADD_SOURCES
+    "${AOSL_DIR}/kernel/fileobj.c"
+    "${AOSL_DIR}/kernel/iofd.c"
+    "${AOSL_DIR}/kernel/timer.c"
+    "${AOSL_DIR}/kernel/osmp.c"
+    "${AOSL_DIR}/kernel/mpq.c"
+    "${AOSL_DIR}/kernel/mpqp.c"
+    "${AOSL_DIR}/kernel/refobj.c"
+    "${AOSL_DIR}/kernel/file.c"
+    "${AOSL_DIR}/kernel/time.c"
+    "${AOSL_DIR}/kernel/log.c"
+    "${AOSL_DIR}/kernel/panic.c"
+    "${AOSL_DIR}/kernel/version.c"
+    "${AOSL_DIR}/kernel/thread.c"
+    "${AOSL_DIR}/kernel/select_mp.c"
+    "${AOSL_DIR}/kernel/poll_mp.c"
+    "${AOSL_DIR}/kernel/et_mp.c"
+    "${AOSL_DIR}/kernel/rt_monitor.c"
+
+    "${AOSL_DIR}/lib/thread.c"
+    "${AOSL_DIR}/lib/atomic.c"
+    "${AOSL_DIR}/lib/bitmap.c"
+    "${AOSL_DIR}/lib/rbtree.c"
+    "${AOSL_DIR}/lib/marshalling.c"
+    "${AOSL_DIR}/lib/marshalling-base-obj.c"
+    "${AOSL_DIR}/lib/psbuff.c"
+    "${AOSL_DIR}/lib/tls.c"
+    "${AOSL_DIR}/lib/utils.c"
+    "${AOSL_DIR}/lib/cond.c"
+    "${AOSL_DIR}/lib/rwlockimpl.c"
+    "${AOSL_DIR}/lib/rwlock.c"
+    "${AOSL_DIR}/lib/byteswap.c"
+    "${AOSL_DIR}/lib/errno.c"
+
+    "${AOSL_DIR}/mm/mm.c"
+
+    "${AOSL_DIR}/net/if.c"
+    "${AOSL_DIR}/net/route.c"
+    "${AOSL_DIR}/net/sk_utils.c"
+    "${AOSL_DIR}/net/inet_ntop.c"
+    "${AOSL_DIR}/net/inet_pton.c"
+    "${AOSL_DIR}/net/dns.c"
+
+    "${AOSL_DIR}/test/aosl_test.c"
+)
+
+# AOSL config
+set(CONFIG_AOSL_IPV6 y)
+set(CONFIG_AOSL_MEM_STAT n)
+set(CONFIG_AOSL_MEM_DUMP n)
+
+if(CONFIG_AOSL_IPV6)
+    list(APPEND AOSL_ADD_SOURCES "${AOSL_DIR}/net/ipv6.c")
+    add_definitions(-DCONFIG_AOSL_IPV6=y)
+endif()
+
+if(NOT CONFIG_AOSL_MEM_STAT STREQUAL n)
+    add_definitions(-DCONFIG_AOSL_MEM_STAT=${CONFIG_AOSL_MEM_STAT})
+endif()
+
+if(NOT CONFIG_AOSL_MEM_DUMP STREQUAL n)
+    add_definitions(-DCONFIG_AOSL_MEM_DUMP=${CONFIG_AOSL_MEM_DUMP})
+endif()
+
+add_library(aosl STATIC ${AOSL_ADD_SOURCES})
+target_include_directories(aosl PUBLIC ${AOSL_ADD_INCLUDES_PUBLIC})
+target_compile_options(aosl PRIVATE -Wno-unused-variable -Wno-unused-function)
+
 # Add link directories for subproject libraries on older CMake/GCC
 link_directories(
-    ${CMAKE_CURRENT_BINARY_DIR}/third_party/aosl
     ${CMAKE_CURRENT_BINARY_DIR}/third_party/mbedtls/library
 )
 
