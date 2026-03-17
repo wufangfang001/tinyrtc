@@ -80,11 +80,12 @@ file(GLOB_RECURSE TINYRTC_SOURCES
 
 # Create library
 add_library(tinyrtc STATIC ${TINYRTC_SOURCES})
-target_link_libraries(tinyrtc aosl)
+# AOSL is built as subproject, directly link to the target
+target_link_libraries(tinyrtc PUBLIC aosl)
 
 # DTLS/SRTP requires mbedTLS for crypto operations (lightweight, portable)
 # Use the submodule version now instead of system libraries
-target_link_libraries(tinyrtc mbedtls mbedx509 mbedcrypto)
+target_link_libraries(tinyrtc PUBLIC mbedtls mbedx509 mbedcrypto)
 
 # Build examples if enabled
 if(TINYRTC_BUILD_EXAMPLES)
