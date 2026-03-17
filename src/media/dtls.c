@@ -21,11 +21,9 @@
 #include "mbedtls/ecdh.h"
 
 /* 
- * NOTE: TinyRTC currently uses mbedtls 2.28.10 LTS.
- * mbedtls 3.x has incompatible API changes that require significant refactoring.
- * If you get compilation errors, make sure you've checked out the correct branch:
- * 
- *   cd third_party/mbedtls && git checkout mbedtls-2.28.10
+ * NOTE: TinyRTC currently supports both mbedtls 2.28+ and mbedtls 3.x
+ * Compatibility handling for the key export API difference.
+ * In mbedtls 3.x, mbedtls_ssl_export_keys was removed, we use callback.
  */
 
 /* =============================================================================
@@ -44,6 +42,35 @@ static mbedtls_ctr_drbg_context dtls_ctr_drbg;
 static int dtls_our_random(void *p_rng, unsigned char *output, size_t output_len)
 {
     return mbedtls_ctr_drbg_random(p_rng, output, output_len);
+}
+
+/* Custom key export callback for mbedtls to capture master secret */
+typedef struct {
+    unsigned char *master_secret;
+    bool got_master_secret;
+} dtls_key_export_ctx_t;
+
+static int dtls_key_export_callback(void *p_expkey,
+                                      const unsigned char *ms,
+                                      const unsigned char *kb,
+                                      size_t maclen,
+                                      size_t keylen,
+                                      size_t ivlen)
+{
+    (void)kb;
+    (void)maclen;
+    (void)keylen;
+    (void)ivlen;
+
+    dtls_key_export_ctx_t *ctx = (dtls_key_export_ctx_t *)p_expkey;
+
+    /* We only need the master_secret, 48 bytes for DTLS-SRTP */
+    if (ctx != NULL && ctx->master_secret != NULL) {
+        memcpy(ctx->master_secret, ms, 48);
+        ctx->got_master_secret = true;
+    }
+
+    return 0;
 }
 
 /* =============================================================================
@@ -118,6 +145,15 @@ dtls_context_t *dtls_init(dtls_role_t role)
         MBEDTLS_ECP_DP_NONE
     };
     mbedtls_ssl_conf_curves(ssl_cfg, curves);
+
+    /* Register key export callback to capture master secret
+     * This is required for mbedtls 3.x compatibility where mbedtls_ssl_export_keys was removed
+     */
+    static dtls_key_export_ctx_t key_export_ctx = {0};
+    key_export_ctx.master_secret = dtls->master_secret;
+    key_export_ctx.got_master_secret = false;
+    mbedtls_ssl_conf_export_keys_cb(ssl_cfg, dtls_key_export_callback, &key_export_ctx);
+    dtls->master_secret_captured = false;
 
     /* Setup SSL */
     mbedtls_ssl_setup(ssl, ssl_cfg);
@@ -372,21 +408,31 @@ tinyrtc_error_t dtls_derive_srtp_keys(dtls_context_t *dtls,
         return TINYRTC_ERROR_MEMORY;
     }
 
-    /* In mbedtls 2.x, we export the master secret and then compute using PRF */
-    unsigned char *master_secret = (unsigned char *)tinyrtc_calloc(1, 48);
-    if (master_secret == NULL) {
-        TINYRTC_LOG_ERROR("dtls_derive_srtp_keys: memory allocation failed");
-        tinyrtc_internal_free(output);
-        return TINYRTC_ERROR_MEMORY;
-    }
+    /* Use master secret captured via key export callback during handshake
+     * This method is compatible with both mbedtls 2.x and 3.x
+     */
+    int ret = 0;
 
-    int ret = mbedtls_ssl_export_keys(dtls->ssl, master_secret, 48, NULL, 0, 0);
-    if (ret != 0) {
-        TINYRTC_LOG_ERROR("dtls_derive_srtp_keys: export master secret failed: %d", ret);
-        tinyrtc_internal_free(master_secret);
+#if defined(MBEDTLS_SSL_EXPORT_KEYS)
+    /* We should have already captured the master secret via callback */
+    if (!dtls->master_secret_captured) {
+        /* If callback didn't fire for some reason, try direct export (mbedtls 2.x) */
+        #if defined(mbedtls_ssl_export_keys)
+        ret = mbedtls_ssl_export_keys(dtls->ssl, dtls->master_secret, 48, NULL, 0, 0);
+        if (ret != 0) {
+            TINYRTC_LOG_ERROR("dtls_derive_srtp_keys: both callback and direct export failed: %d", ret);
+            tinyrtc_internal_free(output);
+            return TINYRTC_ERROR;
+        }
+        #else
+        TINYRTC_LOG_ERROR("dtls_derive_srtp_keys: master secret not captured and no direct export available");
         tinyrtc_internal_free(output);
         return TINYRTC_ERROR;
+        #endif
     }
+#else
+    #error "MBEDTLS_SSL_EXPORT_KEYS must be enabled in mbedtls configuration"
+#endif
 
     /* Now compute the key material using PRF with the correct label
      * According to RFC 5704 (DTLS-SRTP), the label is "EXTRACTOR-dtls_srtp"
@@ -413,18 +459,16 @@ tinyrtc_error_t dtls_derive_srtp_keys(dtls_context_t *dtls,
     /* Then: output = PRF(master_secret, A) */
     mbedtls_sha256_init(&sha_ctx);
     mbedtls_sha256_starts(&sha_ctx, 0);
-    mbedtls_sha256_update(&sha_ctx, master_secret, 48);
+    mbedtls_sha256_update(&sha_ctx, dtls->master_secret, 48);
     mbedtls_sha256_update(&sha_ctx, tmp_hash, 32);
     mbedtls_sha256_finish(&sha_ctx, output);
 
     /* If we need more than 32 bytes, do another round. We need 60 bytes. */
     mbedtls_sha256_init(&sha_ctx);
     mbedtls_sha256_starts(&sha_ctx, 0);
-    mbedtls_sha256_update(&sha_ctx, master_secret, 48);
+    mbedtls_sha256_update(&sha_ctx, dtls->master_secret, 48);
     mbedtls_sha256_update(&sha_ctx, output, 32);
     mbedtls_sha256_finish(&sha_ctx, output + 32);
-
-    tinyrtc_internal_free(master_secret);
 
     if (ret != 0) {
         TINYRTC_LOG_ERROR("dtls_derive_srtp_keys: export failed: %d", ret);

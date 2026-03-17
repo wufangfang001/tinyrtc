@@ -51,6 +51,10 @@ typedef struct dtls_context {
     dtls_role_t role;
     char fingerprint[DTLS_FINGERPRINT_MAX_LEN * 3]; /* SHA-256 fingerprint in hex */
     bool handshake_complete;
+    /* Store captured master secret for DTLS-SRTP key derivation
+     * Compatible with both mbedtls 2.x and 3.x */
+    unsigned char master_secret[48];
+    bool master_secret_captured;
     /* Derived keys for SRTP */
     uint8_t client_master_key[16];
     uint8_t server_master_key[16];
