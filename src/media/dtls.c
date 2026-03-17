@@ -13,22 +13,26 @@
 #include "dtls_srtp_internal.h"
 
 /* mbedtls 2.x vs 3.x compatibility */
+#if __has_include(<psa/crypto.h>)
+#include "psa/crypto.h"
+#endif
 #if __has_include(<mbedtls/entropy.h>)
 #include "mbedtls/entropy.h"
+#endif
+#if __has_include(<mbedtls/ctr_drbg.h>)
 #include "mbedtls/ctr_drbg.h"
-#include "mbedtls/ssl.h"
-#include "mbedtls/entropy_poll.h"
-#include "mbedtls/x509_crt.h"
-#include "mbedtls/ecp.h"
-#include "mbedtls/ecdh.h"
-#elif __has_include(<psa/crypto.h>)
-#include "psa/crypto.h"
+#endif
 #include "mbedtls/ssl.h"
 #if __has_include(<mbedtls/entropy_poll.h>)
 #include "mbedtls/entropy_poll.h"
 #endif
+#if __has_include(<mbedtls/x509_crt.h>)
 #include "mbedtls/x509_crt.h"
+#endif
+#if __has_include(<mbedtls/ecp.h>)
 #include "mbedtls/ecp.h"
+#endif
+#if __has_include(<mbedtls/ecdh.h>)
 #include "mbedtls/ecdh.h"
 #endif
 
