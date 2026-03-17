@@ -92,17 +92,24 @@ The `tools/` directory contains `browser_test.html` - a simple browser-based tes
 # After cloning, you MUST checkout the correct mbedtls version (2.28.10 LTS):
 #
 #   cd third_party/mbedtls
+#   git fetch --tags
 #   git checkout mbedtls-2.28.10
 #
 # mbedtls 3.x has incompatible API changes, we currently only support 2.28.10.
 #
-# For faster clone (about 15MB instead of 300MB+), use:
-#   git clone --recursive --depth=1 --shallow-submodules https://github.com/wufangfang001/tinyrtc.git
+# Full clone (recommended, can fetch tags correctly):
 git clone --recursive https://github.com/wufangfang001/tinyrtc.git
 cd tinyrtc
 cd third_party/mbedtls
+git fetch --tags
 git checkout mbedtls-2.28.10
 cd ../../
+
+# For faster clone (about 15MB instead of 300MB+), use:
+#   git clone --recursive --depth=1 --shallow-submodules https://github.com/wufangfang001/tinyrtc.git
+#   cd tinyrtc/third_party/mbedtls
+#   git fetch --depth=1 --tags
+#   git checkout mbedtls-2.28.10
 
 # Build for Linux
 mkdir build && cd build
