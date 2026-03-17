@@ -24,6 +24,7 @@ TinyRTC aims to provide a minimal, fully compatible WebRTC stack that can run on
 ## Dependencies
 
 - [AOSL](https://github.com/AgoraIO-Community/aosl) - Agora Open Source Library, provides platform abstraction for memory, threads, logging and network operations.
+- [mbed TLS](https://github.com/ARMmbed/mbedtls) - Lightweight crypto library for DTLS handshake and SRTP encryption. Included as git submodule.
 
 ## API Design
 
