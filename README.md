@@ -89,6 +89,8 @@ The `tools/` directory contains `browser_test.html` - a simple browser-based tes
 
 ```bash
 # Clone with all submodules (important, must add --recursive)
+# If you get mbedtls header errors, make sure you're on the correct branch:
+#   cd third_party/mbedtls && git checkout mbedtls-2.28.10
 git clone --recursive https://github.com/wufangfang001/tinyrtc.git
 cd tinyrtc
 
