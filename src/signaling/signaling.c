@@ -306,6 +306,7 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
     /* Check Sec-WebSocket-Accept */
     char expected_accept[32];
     sig_compute_accept_key(client_key, expected_accept, sizeof(expected_accept));
+    aosl_log(AOSL_LOG_DEBUG, "Signaling: computed accept: '%s' (len=%zu)", expected_accept, strlen(expected_accept));
 
     char *accept_header = strstr(response, "Sec-WebSocket-Accept:");
     if (!accept_header) {
