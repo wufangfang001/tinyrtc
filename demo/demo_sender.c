@@ -43,6 +43,9 @@ static void on_track_added(void *user_data, tinyrtc_track_t *track) {
     aosl_log(AOSL_LOG_INFO, "Remote track added: %s codec=%s mid=%s", kind, codec, tinyrtc_track_get_mid(track));
 }
 
+static int g_audio_frame_count = 0;
+static int g_video_frame_count = 0;
+
 static void on_audio_frame(void *user_data, tinyrtc_track_t *track,
                             const uint8_t *frame, size_t frame_len, uint32_t timestamp)
 {
@@ -52,8 +55,11 @@ static void on_audio_frame(void *user_data, tinyrtc_track_t *track,
     (void)user_data;
     (void)track;
     (void)frame;
-    (void)frame_len;
-    (void)timestamp;
+    g_audio_frame_count++;
+    if (g_audio_frame_count % 100 == 1) {
+        aosl_log(AOSL_LOG_INFO, "Received audio frame #%d, size=%zu bytes, ts=%u",
+                g_audio_frame_count, frame_len, timestamp);
+    }
 }
 
 static void on_video_frame(void *user_data, tinyrtc_track_t *track,
@@ -65,8 +71,11 @@ static void on_video_frame(void *user_data, tinyrtc_track_t *track,
     (void)user_data;
     (void)track;
     (void)frame;
-    (void)frame_len;
-    (void)timestamp;
+    g_video_frame_count++;
+    if (g_video_frame_count % 30 == 1) {
+        aosl_log(AOSL_LOG_INFO, "Received video frame #%d, size=%zu bytes, ts=%u",
+                g_video_frame_count, frame_len, timestamp);
+    }
 }
 
 /* Global for signaling callback */
