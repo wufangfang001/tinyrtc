@@ -27,4 +27,7 @@ Thumbs.db
 # Keep the directory structure but ignore daily logs
 docs/memory/*.md
 !docs/memory/DEVNOTES.md
+!docs/memory/ARCHITECTURE_NOTES.md
+!docs/memory/API_CHANGES.md
+!docs/memory/BUGS.md
 !docs/memory/.gitkeep
