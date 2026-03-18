@@ -180,20 +180,20 @@ static void sig_compute_accept_key(const char *client_key, char *accept, size_t 
     for (int i = 0; i < 20; i++) {
         accum = (accum << 8) | hash[i];
         bits += 8;
-        while (bits >= 6 && j + 1 < (int)accept_len) {
+        while (bits >= 6 && j < (int)accept_len - 1) {
             bits -= 6;
             accept[j++] = b64[(accum >> bits) & 0x3F];
         }
     }
 
     // Add remaining bits if any
-    if (bits > 0 && j + 1 < (int)accept_len) {
+    if (bits > 0 && j < (int)accept_len - 1) {
         accum <<= (6 - bits);
         accept[j++] = b64[accum & 0x3F];
     }
 
     // Add padding to make output length multiple of 4
-    while (j % 4 != 0 && j + 1 < (int)accept_len) {
+    while (j % 4 != 0 && j < (int)accept_len - 1) {
         accept[j++] = '=';
     }
 

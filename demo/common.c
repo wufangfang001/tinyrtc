@@ -46,12 +46,12 @@ int demo_init_aosl(void)
 {
     /* Set log level to INFO so we can see all logs in terminal */
     aosl_set_log_level(AOSL_LOG_INFO);
-    aosl_log(AOSL_LOG_INFO, "Initializing AOSL for demo...");
+    aosl_log(AOSL_LOG_INFO, "Initializing AOSL for demo...\n");
     /* AOSL is initialized automatically when linked */
     return 0;
 }
 
 void demo_exit_aosl(void)
 {
-    aosl_log(AOSL_LOG_INFO, "Exiting demo...");
+    aosl_log(AOSL_LOG_INFO, "Exiting demo...\n");
 }

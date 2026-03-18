@@ -26,20 +26,20 @@
 #include <string.h>
 
 static void on_ice_candidate(void *user_data, tinyrtc_ice_candidate_t *candidate) {
-    aosl_log(AOSL_LOG_INFO, "Got local ICE candidate: %s:%d type=%s", candidate->ip, candidate->port, candidate->type);
+    aosl_log(AOSL_LOG_INFO, "Got local ICE candidate: %s:%d type=%s\n", candidate->ip, candidate->port, candidate->type);
 }
 
 static void on_connection_state_change(void *user_data, tinyrtc_pc_state_t new_state) {
     static const char *state_names[] = {
         "NEW", "CONNECTING", "CONNECTED", "DISCONNECTED", "FAILED", "CLOSED"
     };
-    aosl_log(AOSL_LOG_INFO, "Connection state changed: %s", state_names[new_state]);
+    aosl_log(AOSL_LOG_INFO, "Connection state changed: %s\n", state_names[new_state]);
 }
 
 static void on_track_added(void *user_data, tinyrtc_track_t *track) {
     const char *kind = tinyrtc_track_get_kind(track) == TINYRTC_TRACK_KIND_AUDIO ? "audio" : "video";
     const char *codec = tinyrtc_codec_get_name(tinyrtc_track_get_codec(track));
-    aosl_log(AOSL_LOG_INFO, "Remote track added: %s codec=%s mid=%s", kind, codec, tinyrtc_track_get_mid(track));
+    aosl_log(AOSL_LOG_INFO, "Remote track added: %s codec=%s mid=%s\n", kind, codec, tinyrtc_track_get_mid(track));
 }
 
 static int g_audio_frame_count = 0;
@@ -65,7 +65,7 @@ static void on_audio_frame(void *user_data, tinyrtc_track_t *track,
 
     g_audio_frame_count++;
     if (g_audio_frame_count % 100 == 1) {
-        aosl_log(AOSL_LOG_INFO, "Received audio frame #%d, size=%zu bytes, ts=%u, saved to file",
+        aosl_log(AOSL_LOG_INFO, "Received audio frame #%d, size=%zu bytes, ts=%u, saved to file\n",
                 g_audio_frame_count, frame_len, timestamp);
     }
 }
@@ -88,7 +88,7 @@ static void on_video_frame(void *user_data, tinyrtc_track_t *track,
 
     g_video_frame_count++;
     if (g_video_frame_count % 30 == 1) {
-        aosl_log(AOSL_LOG_INFO, "Received video frame #%d, size=%zu bytes, ts=%u, saved to file",
+        aosl_log(AOSL_LOG_INFO, "Received video frame #%d, size=%zu bytes, ts=%u, saved to file\n",
                 g_video_frame_count, frame_len, timestamp);
     }
 }
@@ -104,7 +104,7 @@ static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
 
     switch (event->type) {
         case TINYRTC_SIGNAL_EVENT_OFFER:
-            aosl_log(AOSL_LOG_INFO, "Received offer from signaling server");
+            aosl_log(AOSL_LOG_INFO, "Received offer from signaling server\n");
             if (g_pc && event->data.offer) {
                 g_pending_offer = aosl_malloc(strlen(event->data.offer) + 1);
                 if (g_pending_offer) {
@@ -115,7 +115,7 @@ static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
             }
             break;
         case TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE:
-            aosl_log(AOSL_LOG_DEBUG, "Received ICE candidate from signaling");
+            aosl_log(AOSL_LOG_DEBUG, "Received ICE candidate from signaling\n");
             /* TODO: add ICE candidate API to TinyRTC */
             break;
         default:
@@ -148,7 +148,7 @@ int main(int argc, char **argv)
     tinyrtc_get_default_config(&config);
     tinyrtc_context_t *ctx = tinyrtc_init(&config);
     if (!ctx) {
-        aosl_log(AOSL_LOG_ERROR, "Failed to initialize TinyRTC");
+        aosl_log(AOSL_LOG_ERROR, "Failed to initialize TinyRTC\n");
         return 1;
     }
 
@@ -164,7 +164,7 @@ int main(int argc, char **argv)
 
     tinyrtc_peer_connection_t *pc = tinyrtc_peer_connection_create(ctx, &pc_config);
     if (!pc) {
-        aosl_log(AOSL_LOG_ERROR, "Failed to create peer connection");
+        aosl_log(AOSL_LOG_ERROR, "Failed to create peer connection\n");
         tinyrtc_destroy(ctx);
         return 1;
     }
@@ -175,10 +175,10 @@ int main(int argc, char **argv)
     g_audio_file = fopen("output_audio.opus", "wb");
     g_video_file = fopen("output_video.h264", "wb");
     if (g_audio_file) {
-        aosl_log(AOSL_LOG_INFO, "Saving received audio to output_audio.opus");
+        aosl_log(AOSL_LOG_INFO, "Saving received audio to output_audio.opus\n");
     }
     if (g_video_file) {
-        aosl_log(AOSL_LOG_INFO, "Saving received video to output_video.h264");
+        aosl_log(AOSL_LOG_INFO, "Saving received video to output_video.h264\n");
     }
 
     /* Add media tracks we are willing to receive */
@@ -196,7 +196,7 @@ int main(int argc, char **argv)
 
     if (auto_signaling) {
         /* Automatic signaling using public signaling server */
-        aosl_log(AOSL_LOG_INFO, "Starting automatic signaling... room=%s server=%s",
+        aosl_log(AOSL_LOG_INFO, "Starting automatic signaling... room=%s server=%s\n",
                 room_id, default_signaling_server);
 
         tinyrtc_signaling_config_t sig_config = {0};
@@ -209,20 +209,20 @@ int main(int argc, char **argv)
             ctx, &sig_config, signaling_callback, NULL);
 
         if (!sig) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to create signaling client");
+            aosl_log(AOSL_LOG_ERROR, "Failed to create signaling client\n");
             goto cleanup;
         }
 
         tinyrtc_error_t err = tinyrtc_signaling_connect(sig);
         if (err != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to connect to signaling server: %s",
+            aosl_log(AOSL_LOG_ERROR, "Failed to connect to signaling server: %s\n",
                     tinyrtc_get_error_string(err));
             tinyrtc_signaling_destroy(sig);
             goto cleanup;
         }
 
-        aosl_log(AOSL_LOG_INFO, "Connected to signaling server, waiting for offer...");
-        aosl_log(AOSL_LOG_INFO, "Open browser_test.html and enter room-id: %s", room_id);
+        aosl_log(AOSL_LOG_INFO, "Connected to signaling server, waiting for offer...\n");
+        aosl_log(AOSL_LOG_INFO, "Open browser_test.html and enter room-id: %s\n", room_id);
 
         /* Poll until we get an offer */
         while (!g_got_offer && tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
@@ -231,18 +231,18 @@ int main(int argc, char **argv)
         }
 
         if (!g_got_offer || !g_pending_offer) {
-            aosl_log(AOSL_LOG_ERROR, "Timed out waiting for offer");
+            aosl_log(AOSL_LOG_ERROR, "Timed out waiting for offer\n");
             tinyrtc_signaling_destroy(sig);
             goto cleanup;
         }
 
-        aosl_log(AOSL_LOG_INFO, "Got offer, setting remote description...");
+        aosl_log(AOSL_LOG_INFO, "Got offer, setting remote description...\n");
         tinyrtc_error_t err2 = tinyrtc_peer_connection_set_remote_description(pc, g_pending_offer);
         aosl_free(g_pending_offer);
         g_pending_offer = NULL;
 
         if (err2 != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to set remote description: %s",
+            aosl_log(AOSL_LOG_ERROR, "Failed to set remote description: %s\n",
                     tinyrtc_get_error_string(err2));
             tinyrtc_signaling_destroy(sig);
             goto cleanup;
@@ -252,29 +252,29 @@ int main(int argc, char **argv)
         char *answer_sdp = NULL;
         tinyrtc_error_t err3 = tinyrtc_peer_connection_create_answer(pc, &answer_sdp);
         if (err3 != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to create answer: %s",
+            aosl_log(AOSL_LOG_ERROR, "Failed to create answer: %s\n",
                     tinyrtc_get_error_string(err3));
             tinyrtc_signaling_destroy(sig);
             goto cleanup;
         }
 
-        aosl_log(AOSL_LOG_INFO, "Created answer, sending to signaling server...");
+        aosl_log(AOSL_LOG_INFO, "Created answer, sending to signaling server...\n");
         tinyrtc_error_t err4 = tinyrtc_signaling_send_answer(sig, NULL, answer_sdp);
         if (err4 != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to send answer: %s",
+            aosl_log(AOSL_LOG_ERROR, "Failed to send answer: %s\n",
                     tinyrtc_get_error_string(err4));
             tinyrtc_free(answer_sdp);
             tinyrtc_signaling_destroy(sig);
             goto cleanup;
         }
 
-        aosl_log(AOSL_LOG_INFO, "Answer sent successfully");
-        aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)");
+        aosl_log(AOSL_LOG_INFO, "Answer sent successfully\n");
+        aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
         tinyrtc_free(answer_sdp);
 
         /* Main loop */
         while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
-            tinyrtc_process_events(ctx, 100);
+            tinyrtc_process_events(ctx, 10);
             aosl_msleep(10);
         }
 
@@ -283,16 +283,16 @@ int main(int argc, char **argv)
         /* Manual mode: Read offer from file */
         char *offer_sdp = demo_read_sdp(argv[2]);
         if (!offer_sdp) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to read offer from %s", argv[2]);
+            aosl_log(AOSL_LOG_ERROR, "Failed to read offer from %s\n", argv[2]);
             goto cleanup;
         }
 
-        aosl_log(AOSL_LOG_INFO, "Setting remote description from offer...");
+        aosl_log(AOSL_LOG_INFO, "Setting remote description from offer...\n");
         tinyrtc_error_t err = tinyrtc_peer_connection_set_remote_description(pc, offer_sdp);
         tinyrtc_free(offer_sdp);
 
         if (err != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to set remote description: %s",
+            aosl_log(AOSL_LOG_ERROR, "Failed to set remote description: %s\n",
                     tinyrtc_get_error_string(err));
             goto cleanup;
         }
@@ -301,34 +301,34 @@ int main(int argc, char **argv)
         char *answer_sdp = NULL;
         err = tinyrtc_peer_connection_create_answer(pc, &answer_sdp);
         if (err != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to create answer: %s",
+            aosl_log(AOSL_LOG_ERROR, "Failed to create answer: %s\n",
                     tinyrtc_get_error_string(err));
             goto cleanup;
         }
 
         int wr = demo_write_sdp("answer.sdp", answer_sdp);
         if (wr != 0) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to write answer to answer.sdp");
+            aosl_log(AOSL_LOG_ERROR, "Failed to write answer to answer.sdp\n");
             tinyrtc_free(answer_sdp);
             goto cleanup;
         }
 
-        aosl_log(AOSL_LOG_INFO, "Answer generated and saved to answer.sdp");
-        aosl_log(AOSL_LOG_INFO, "Copy answer.sdp to browser test page to complete connection setup");
-        aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)");
+        aosl_log(AOSL_LOG_INFO, "Answer generated and saved to answer.sdp\n");
+        aosl_log(AOSL_LOG_INFO, "Copy answer.sdp to browser test page to complete connection setup\n");
+        aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
         tinyrtc_free(answer_sdp);
 
         while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
-            tinyrtc_process_events(ctx, 100);
+            tinyrtc_process_events(ctx, 10);
             aosl_msleep(10);
         }
     } else {
-        aosl_log(AOSL_LOG_INFO, "Usage:");
-        aosl_log(AOSL_LOG_INFO, "  Automatic mode:  %s --room <room-id>", argv[0]);
-        aosl_log(AOSL_LOG_INFO, "  Manual mode:     %s --offer <offer.sdp>", argv[0]);
-        aosl_log(AOSL_LOG_INFO, "");
-        aosl_log(AOSL_LOG_INFO, "In automatic mode, open browser_test.html with same room-id");
-        aosl_log(AOSL_LOG_INFO, "and connection will be established automatically");
+        aosl_log(AOSL_LOG_INFO, "Usage:\n");
+        aosl_log(AOSL_LOG_INFO, "  Automatic mode:  %s --room <room-id>\n", argv[0]);
+        aosl_log(AOSL_LOG_INFO, "  Manual mode:     %s --offer <offer.sdp>\n", argv[0]);
+        aosl_log(AOSL_LOG_INFO, "\n");
+        aosl_log(AOSL_LOG_INFO, "In automatic mode, open browser_test.html with same room-id\n");
+        aosl_log(AOSL_LOG_INFO, "and connection will be established automatically\n");
         goto cleanup;
     }
 
@@ -339,11 +339,11 @@ cleanup:
     /* Close output files */
     if (g_audio_file) {
         fclose(g_audio_file);
-        aosl_log(AOSL_LOG_INFO, "Saved audio frames to output_audio.opus");
+        aosl_log(AOSL_LOG_INFO, "Saved audio frames to output_audio.opus\n");
     }
     if (g_video_file) {
         fclose(g_video_file);
-        aosl_log(AOSL_LOG_INFO, "Saved video frames to output_video.h264");
+        aosl_log(AOSL_LOG_INFO, "Saved video frames to output_video.h264\n");
     }
     g_pc = NULL;
     tinyrtc_peer_connection_destroy(pc);
