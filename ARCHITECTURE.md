@@ -143,19 +143,41 @@ All implementation-internal headers are in `src/include/` and are not exposed ex
 
 ## Platform Abstraction via AOSL
 
-All system operations are delegated to AOSL:
+TinyRTC builds on top of **AOSL (Advanced Operating System Layer)**, a cross-platform low-level general-purpose component library that provides complete operating system abstractions and asynchronous programming primitives.
 
-| Functionality         | AOSL Interface Used        |
-|-----------------------|----------------------------|
-| Memory allocation     | `aosl_malloc`, `aosl_free` |
-| Threading             | `aosl_thread_create`, etc. |
-| Mutex/Synchronization | `aosl_mutex_t`             |
-| Network sockets       | `aosl_socket_t`            |
-| Logging               | `aosl_log`                 |
-| Time                  | `aosl_gettime`             |
-| Random                | `aosl_random`              |
+### AOSL Capabilities Used by TinyRTC
 
-This design allows TinyRTC to be ported to any platform that has AOSL support.
+| Functionality         | AOSL Module                | Description |
+|-----------------------|----------------------------|-------------|
+| Memory allocation     | `aosl_mm.h`                | `aosl_malloc`, `aosl_free`, `aosl_calloc`, `aosl_realloc` with memory statistics |
+| Atomic Operations     | `aosl_atomic.h`            | Atomic read/write/increment/decrement, CAS, memory barriers |
+| Threading             | `aosl_thread.h`            | Thread creation, mutex, read-write locks, condition variables, events |
+| Synchronization       | `aosl_thread.h`            | Thread-local storage, multiple synchronization primitives |
+| Network sockets       | `aosl_socket.h` + `aosl_mpq_net.h` | Socket address handling, async TCP/UDP networking via MPQ |
+| Logging               | `aosl_log.h`               | Leveled logging (debug/info/warning/error) |
+| Time management       | `aosl_time.h`              | Tick count, timestamps, sleep |
+| Timers                | `aosl_mpq_timer.h`         | Periodic and one-shot timers on message queue |
+| IO Event Monitoring   | `aosl_mpq_fd.h`            | File descriptor event monitoring for async network I/O |
+| Message Queue         | `aosl_mpq.h`               | Multi-priority message queue for async task scheduling |
+| Thread Pool           | `aosl_mpqp.h`              | Thread pool for offloading CPU-intensive work |
+| Data Structures       | `aosl_list.h`, `aosl_rbtree.h`, `aosl_psb.h` | Doubly linked list, red-black tree, packet buffer |
+| Reference Counting    | `aosl_ref.h`               | Reference counting with read-write locks |
+| Error Handling        | `aosl_errno.h`             | Standardized error codes and descriptions |
+
+### Architecture Benefit
+
+AOSL provides a complete **asynchronous message-driven programming model** via MPQ (Multiplex Queue):
+- All network I/O events are processed asynchronously in the message queue
+- Timer events are integrated into the same event loop
+- Work can be offloaded to thread pools for CPU-intensive operations
+- This allows TinyRTC to have a consistent threading model across different platforms
+
+TinyRTC can run:
+- **Single-threaded**: All processing in the main MPQ event loop
+- **Multi-threaded**: Utilize AOSL thread pools for parallel processing
+- **Custom**: Application can control thread allocation strategy
+
+This design allows TinyRTC to be ported to any platform that has AOSL support (Linux, RTOS, etc.).
 
 ## Threading Model
 

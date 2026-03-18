@@ -37,13 +37,16 @@ This file records key architecture decisions and tradeoffs made during developme
 
 ## 2026-03-16: AOSL Platform Abstraction
 
-**Decision:** All platform-specific operations go through AOSL (Agora Open Source Library):
+**Decision:** All platform-specific operations go through AOSL (Advanced Operating System Layer):
 - Memory allocation: `aosl_malloc`/`aosl_free`
-- Threading: `aosl_thread_*`
-- Network: `aosl_socket_*`
-- Time: `aosl_gettime`
-- Random: `aosl_random`
-- Logging: `aosl_log`
+- Atomic operations: `aosl_atomic_*`
+- Threading: `aosl_thread_*` (mutex, rwlock, condition variable, event)
+- Network: `aosl_socket_*` + async MPQ (message queue) for event-driven I/O
+- Time: `aosl_tick_*` + `aosl_mpq_timer` for timers
+- Logging: `aosl_log` leveled logging
+- Message queue: `aosl_mpq` for async task scheduling with priorities
+- Thread pool: `aosl_mpqp` for CPU-intensive work offload
+- Data structures: linked list, red-black tree, packet buffer
 
 **Rationale:**
 - TinyRTC focuses on the WebRTC protocol stack only
