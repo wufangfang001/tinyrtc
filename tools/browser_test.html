@@ -31,7 +31,17 @@
     </div>
 
     <div class="section">
-        <h2>SDP Exchange</h2>
+        <h2>Automatic Signaling</h2>
+        <p>Use public signaling server to automatically exchange SDP with TinyRTC:</p>
+        <label>Room ID:</label>
+        <input type="text" id="roomId" value="tinyrtc-demo" size="30">
+        <br><br>
+        <button id="startAutoSignaling">Start Automatic Signaling</button>
+        <div id="autoSignalingStatus"></div>
+    </div>
+
+    <div class="section">
+        <h2>Manual SDP Exchange</h2>
         <div id="offerSection">
             <h3>1. Generate Offer (browser -> TinyRTC)</h3>
             <button id="createOffer">Create Offer</button>
@@ -268,6 +278,147 @@ window.addEventListener('beforeunload', () => {
 
 log('Page ready - click "Start Camera & Microphone" to begin');
 updateConnectionState('disconnected');
+
+/* Automatic signaling using public WebSocket server */
+let autoSignaling = {
+    socket: null,
+    roomId: null,
+    connected: false
+};
+
+document.getElementById('startAutoSignaling').addEventListener('click', async () => {
+    if (!localStream) {
+        alert('Please click "Start Camera & Microphone" first!');
+        return;
+    }
+
+    const roomId = document.getElementById('roomId').value.trim();
+    if (!roomId) {
+        alert('Please enter a room ID');
+        return;
+    }
+
+    autoSignaling.roomId = roomId;
+    const statusDiv = document.getElementById('autoSignalingStatus');
+
+    try {
+        /* Connect to public signaling server */
+        const signalingUrl = 'wss://signal-master.appspot.com:443';
+        log(`Connecting to signaling server: ${signalingUrl}`);
+        statusDiv.innerHTML = `<p>Connecting to signaling server...</p>`;
+
+        autoSignaling.socket = new WebSocket(signalingUrl);
+
+        autoSignaling.socket.onopen = () => {
+            log('Connected to signaling server');
+            autoSignaling.connected = true;
+            statusDiv.innerHTML += `<p style="color: green;">✓ Connected to signaling server</p>`;
+
+            /* Send presence check */
+            autoSignaling.socket.send(JSON.stringify({
+                checkPresence: true,
+                channel: roomId
+            }));
+            log(`Sent presence check for room: ${roomId}`);
+
+            /* If we're the offerer (browser -> TinyRTC), create offer */
+            if (!peerConnection) {
+                peerConnection = createPeerConnection();
+            }
+
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+                log('Added local ' + track.kind + ' track');
+            });
+
+            peerConnection.createOffer().then(offer => {
+                peerConnection.setLocalDescription(offer);
+                log('Created offer, waiting for presence response...');
+
+                /* Wait a bit then send offer */
+                setTimeout(() => {
+                    const msg = {
+                        sender: 'browser-' + Math.random().toString(36).substr(2),
+                        channel: roomId,
+                        message: {
+                            type: 'offer',
+                            sdp: offer.sdp
+                        }
+                    };
+                    autoSignaling.socket.send(JSON.stringify(msg));
+                    log('Sent offer to signaling server');
+                    statusDiv.innerHTML += `<p style="color: green;">✓ Offer sent, waiting for answer...</p>`;
+                }, 1000);
+            }).catch(e => {
+                log('Failed to create offer: ' + e.message);
+                alert('Failed to create offer: ' + e.message);
+            });
+        };
+
+        autoSignaling.socket.onmessage = (event) => {
+            const data = JSON.parse(event.data);
+
+            /* Check if this message is for our room and not from us */
+            if (data.channel !== roomId) return;
+            if (data.sender === undefined) return;
+
+            /* This is from the WebRTC-Experiment protocol */
+            if (data.isChannelPresent !== undefined) {
+                log(`Presence check response: channel present = ${data.isChannelPresent}`);
+                return;
+            }
+
+            if (!data.message) return;
+
+            const msg = data.message;
+
+            if (msg.type === 'answer') {
+                log('Received answer from TinyRTC');
+                const answer = new RTCSessionDescription({
+                    type: 'answer',
+                    sdp: msg.sdp
+                });
+                peerConnection.setRemoteDescription(answer).then(() => {
+                    log('Remote answer set, connection starting...');
+                    statusDiv.innerHTML += `<p style="color: green;">✓ Answer accepted, connection starting...</p>`;
+                }).catch(e => {
+                    log('Failed to set remote answer: ' + e.message);
+                });
+            } else if (msg.type === 'candidate') {
+                if (msg.candidate) {
+                    peerConnection.addIceCandidate(new RTCIceCandidate({
+                        candidate: msg.candidate
+                    })).then(() => {
+                        log('Added ICE candidate');
+                    }).catch(e => {
+                        log('Failed to add ICE candidate: ' + e.message);
+                    });
+                }
+            }
+        };
+
+        autoSignaling.socket.onerror = (error) => {
+            log('Signaling socket error: ' + error);
+            statusDiv.innerHTML += `<p style="color: red;">✗ Socket error</p>`;
+        };
+
+        autoSignaling.socket.onclose = () => {
+            log('Signaling socket closed');
+            autoSignaling.connected = false;
+            statusDiv.innerHTML += `<p>Signaling socket closed</p>`;
+        };
+
+    } catch (e) {
+        log('Failed to start automatic signaling: ' + e.message);
+        statusDiv.innerHTML += `<p style="color: red;">✗ Error: ${e.message}</p>`;
+    }
+});
+
+/* Handle incoming messages when we receive an offer from TinyRTC */
+/* This is for the case when TinyRTC is the offerer */
+// The code above handles browser as offerer, for full compatibility we need to handle answerer too
+// But the current TinyRTC demo has sender (offerer) and receiver (answerer), so browser is usually offerer
+
 </script>
 </body>
 </html>

@@ -58,7 +58,7 @@ typedef struct {
     union {
         char *offer;           /**< SDP offer */
         char *answer;          /**< SDP answer */
-        tinyrtc_ice_candidate_t candidate; /**< ICE candidate */
+        tinyrtc_ice_candidate_t *candidate; /**< ICE candidate */
     } data;
 } tinyrtc_signal_event_t;
 
