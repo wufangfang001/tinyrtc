@@ -76,7 +76,62 @@ tinyrtc_destroy(ctx);
 
 ## Testing with Browser
 
-The `tools/` directory contains `browser_test.html` - a simple browser-based test page:
+The `tools/` directory contains `browser_test.html` - a simple browser-based test page that supports **two modes**:
+
+### Mode 1: Automatic Signaling (Recommended)
+
+Uses public signaling server to automatically connect:
+
+1. Build TinyRTC first (see Building section)
+2. On TinyRTC side, run receiver demo with a room ID:
+   ```bash
+   ./build/demo/tinyrtc_recv --room my-test-room
+   ```
+   Or run sender demo:
+   ```bash
+   ./build/demo/tinyrtc_send --room my-test-room
+   ```
+3. Open `tools/browser_test.html` in a modern browser
+4. Click "Start Camera & Microphone"
+5. In "Automatic Signaling" section, enter the **same room ID** and click "Start Automatic Signaling"
+6. SDP will be exchanged automatically via public signaling server
+7. Connection established - you can see video from browser
+
+The public signaling server `wss://signal-master.appspot.com:443` is used by default. However, this public server is often unreachable. We provide a simple Python signaling server for local area network testing:
+
+### Run your own signaling server (Recommended for LAN testing)
+
+We provide two versions of simple signaling server (same functionality):
+
+- `simple-signaling-server.py` - uses the `websockets` library (cleaner code)
+- `simple-signaling-server-raw.py` - **no third-party dependencies**, pure asyncio TCP with manual WebSocket handshake
+
+Start the server:
+
+```bash
+# Start simple signaling server on port 8080 (needs websockets library)
+cd tools/
+python3 simple-signaling-server.py 8080
+
+# Or use the raw version (no dependencies)
+python3 simple-signaling-server-raw.py 8080
+```
+
+Then use it with:
+```bash
+# In TinyRTC receiver
+./tinyrtc_recv --room my-test-room --server ws://your-server-ip:8080
+
+# In browser_test.html, the signaling URL will be automatically used
+# when you connect with the same room ID
+```
+
+You can specify your own signaling server with command line:
+```bash
+./tinyrtc_recv --room my-test-room --server ws://your-signaling-server:8080
+```
+
+### Mode 2: Manual SDP Exchange (Original)
 
 1. Open `tools/browser_test.html` in a modern browser
 2. Click "Start Camera & Microphone"
