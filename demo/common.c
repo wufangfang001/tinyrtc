@@ -44,6 +44,8 @@ int demo_write_sdp(const char *path, const char *sdp)
 
 int demo_init_aosl(void)
 {
+    /* Set log level to INFO so we can see all logs in terminal */
+    aosl_set_log_level(AOSL_LOG_INFO);
     aosl_log(AOSL_LOG_INFO, "Initializing AOSL for demo...");
     /* AOSL is initialized automatically when linked */
     return 0;
