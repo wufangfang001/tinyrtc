@@ -1,43 +1,33 @@
-# Known Bugs - TinyRTC
+# Bugs - Known Issues Tracker
 
-This file tracks known bugs, issues, and limitations. Bugs marked [fixed] are kept for historical reference.
+This file tracks known bugs, issues, and limitations.
 
-## Table of Contents
+## Critical Issues
 
-- [Active Issues](#active-issues)
-- [Fixed Issues](#fixed-issues)
+None currently known.
 
----
+## Known Limitations
 
-## Active Issues
+- [ ] No NACK/PLI RTCP feedback support for packet loss recovery
+- [ ] No SCTP data channel support
+- [ ] TURN client implementation is a placeholder, not fully implemented
+- [ ] Maximum 1 video track and 1 audio track per peer connection currently
+- [ ] No BBR congestion control algorithm option, only AIMD
+- [ ] No SIMULCAST support
+- [ ] Unit test coverage is incomplete
 
-| Issue | Module | Severity | Reported | Notes |
-|-------|--------|----------|----------|-------|
-| **No unit tests** | All | Medium | 2026-03-16 | Need to add unit test infrastructure and tests for each module |
-| **TURN not implemented** | ICE | Low | 2026-03-16 | Only placeholder exists, TURN client not implemented |
-| **SCTP/Data channel not implemented** | All | Low | 2026-03-16 | Planned for future development |
-| **NACK/PLI RTCP feedback not implemented** | RTP | Medium | 2026-03-16 | Needed for good congestion control on lossy networks |
-| **Interoperability not fully tested** | All | Medium | 2026-03-16 | Only tested with Chrome browser, need more testing with Firefox/Safari |
-| **Memory leak checking incomplete** | All | Medium | 2026-03-16 | Haven't done full leak check with valgrind |
-| **MTU discovery not implemented** | ICE/RTP | Low | 2026-03-16 | Currently uses fixed 1200 MTU |
-| **No ICE restart support** | ICE | Low | 2026-03-16 | Can't restart ICE after connection failure |
+## Interoperability Notes
 
----
+- Tested with Chrome/Edge browser WebRTC implementation
+- H.264 codec negotiation has been tested
+- Other codecs need more testing
+
+## Open Questions
+
+- Is the jitter buffer adaptive algorithm optimal for all network conditions?
+- Does the congestion control respond quickly enough to sudden bandwidth changes?
 
 ## Fixed Issues
 
-| Issue | Module | Fixed in | Date | Description |
-|-------|--------|----------|------|-------------|
-| *None yet* | | | | First release, no fixes yet |
+<!-- Add fixed issues here with dates -->
 
----
-
-## Contributing
-
-If you find a new bug, please add it to this file with:
-- Clear description
-- How to reproduce
-- Module affected
-- Severity assessment
-
-When fixing, move it to Fixed Issues with the fix date.

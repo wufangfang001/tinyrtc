@@ -31,3 +31,4 @@ docs/memory/*.md
 !docs/memory/API_CHANGES.md
 !docs/memory/BUGS.md
 !docs/memory/.gitkeep
+build*

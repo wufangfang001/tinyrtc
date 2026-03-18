@@ -12,13 +12,17 @@ TinyRTC aims to provide a minimal, fully compatible WebRTC stack that can run on
 
 ## Features
 
-- [ ] Signal processing
-- [ ] P2P connection (ICE/STUN/TURN)
-- [ ] Audio/video RTP/RTCP transmission
-- [ ] Congestion control (CC) evaluation
-- [ ] Weak network resistance optimization
-- [ ] Pure GNU99 C implementation
-- [ ] Platform abstraction via AOSL
+- [x] P2P connection (ICE/STUN)
+- [x] DTLS/SRTP key exchange and encryption
+- [x] Audio/video RTP/RTCP transmission
+- [x] Jitter buffer (adaptive delay)
+- [x] Congestion control (AIMD) with bandwidth estimation
+- [x] SDP parsing and generation
+- [x] Pure GNU99 C implementation
+- [x] Platform abstraction via AOSL
+- [ ] TURN client (placeholder, can be added later)
+- [ ] NACK/PLI RTCP feedback
+- [ ] SCTP data channel support
 - [ ] Compatible with standard WebRTC
 
 ## Dependencies
@@ -163,6 +167,19 @@ make -j$(nproc)
 # Use your platform build system - just compile the .c files and link with AOSL
 ```
 
+## Running Unit Tests
+
+TinyRTC uses minunit (lightweight single-header C unit testing framework). To build and run tests:
+
+```bash
+mkdir -p build && cd build
+cmake .. -DTINYRTC_BUILD_TESTS=ON
+make -j$(nproc)
+./tests/tinyrtc_tests
+```
+
+All tests **must pass** before any pull request can be merged.
+
 ## Architecture
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed architecture documentation.
@@ -170,6 +187,14 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for detailed architecture documentation
 ## Development Tasks
 
 See [TASKS.md](./TASKS.md) for current development progress.
+
+## Project Documentation
+
+- [ARCHITECTURE.md](./ARCHITECTURE.md) - Overall architecture documentation
+- [docs/memory/ARCHITECTURE_NOTES.md](./docs/memory/ARCHITECTURE_NOTES.md) - Architecture decision records
+- [docs/memory/API_CHANGES.md](./docs/memory/API_CHANGES.md) - API change history
+- [docs/memory/BUGS.md](./docs/memory/BUGS.md) - Known bugs and limitations
+- [docs/memory/DEVELOPMENT_RULES.md](./docs/memory/DEVELOPMENT_RULES.md) - Development workflow rules
 
 ## License
 
