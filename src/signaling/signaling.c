@@ -1065,6 +1065,46 @@ tinyrtc_signaling_state_t tinyrtc_signaling_get_state(tinyrtc_signaling_t *sig) 
     return sig->state;
 }
 
+/* Helper: JSON escape a string into buffer */
+static int sig_json_escape(const char *input, char *output, size_t output_size) {
+    size_t out_len = 0;
+    while (*input && out_len < output_size - 1) {
+        switch (*input) {
+            case '"':
+                if (out_len + 2 >= output_size) break;
+                output[out_len++] = '\\';
+                output[out_len++] = '"';
+                break;
+            case '\\':
+                if (out_len + 2 >= output_size) break;
+                output[out_len++] = '\\';
+                output[out_len++] = '\\';
+                break;
+            case '\n':
+                if (out_len + 2 >= output_size) break;
+                output[out_len++] = '\\';
+                output[out_len++] = 'n';
+                break;
+            case '\r':
+                if (out_len + 2 >= output_size) break;
+                output[out_len++] = '\\';
+                output[out_len++] = 'r';
+                break;
+            case '\t':
+                if (out_len + 2 >= output_size) break;
+                output[out_len++] = '\\';
+                output[out_len++] = 't';
+                break;
+            default:
+                output[out_len++] = *input;
+                break;
+        }
+        input++;
+    }
+    output[out_len] = '\0';
+    return (int)out_len;
+}
+
 tinyrtc_error_t tinyrtc_signaling_send_offer(
     tinyrtc_signaling_t *sig,
     const char *to_client_id,
@@ -1077,7 +1117,11 @@ tinyrtc_error_t tinyrtc_signaling_send_offer(
     }
 
     /* Build JSON according to expected format */
+    /* Need to escape SDP because it contains newlines */
     char json[8192];
+    char escaped_sdp[4096];
+    int escaped_len = sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
+
     int len = snprintf(json, sizeof(json),
         "{\n"
         "  \"sender\": \"%s\",\n"
@@ -1087,7 +1131,7 @@ tinyrtc_error_t tinyrtc_signaling_send_offer(
         "    \"sdp\": \"%s\"\n"
         "  }\n"
         "}",
-        sig->client_id, sig->room_id, sdp
+        sig->client_id, sig->room_id, escaped_sdp
     );
 
     if (len >= (int)sizeof(json)) {
@@ -1113,7 +1157,11 @@ tinyrtc_error_t tinyrtc_signaling_send_answer(
     }
 
     /* Build JSON according to expected format */
+    /* Need to escape SDP because it contains newlines */
     char json[8192];
+    char escaped_sdp[4096];
+    int escaped_len = sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
+
     int len = snprintf(json, sizeof(json),
         "{\n"
         "  \"sender\": \"%s\",\n"
@@ -1123,7 +1171,7 @@ tinyrtc_error_t tinyrtc_signaling_send_answer(
         "    \"sdp\": \"%s\"\n"
         "  }\n"
         "}",
-        sig->client_id, sig->room_id, sdp
+        sig->client_id, sig->room_id, escaped_sdp
     );
 
     if (len >= (int)sizeof(json)) {
