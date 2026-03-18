@@ -44,6 +44,8 @@ static void on_track_added(void *user_data, tinyrtc_track_t *track) {
 
 static int g_audio_frame_count = 0;
 static int g_video_frame_count = 0;
+static FILE *g_audio_file = NULL;
+static FILE *g_video_file = NULL;
 
 static void on_audio_frame(void *user_data, tinyrtc_track_t *track,
                             const uint8_t *frame, size_t frame_len, uint32_t timestamp)
@@ -53,10 +55,17 @@ static void on_audio_frame(void *user_data, tinyrtc_track_t *track,
      * encoded frames ready for decoding. */
     (void)user_data;
     (void)track;
-    (void)frame;
+    (void)timestamp;
+
+    /* Save the encoded frame to file */
+    if (g_audio_file && frame_len > 0) {
+        fwrite(frame, 1, frame_len, g_audio_file);
+        fflush(g_audio_file);
+    }
+
     g_audio_frame_count++;
     if (g_audio_frame_count % 100 == 1) {
-        aosl_log(AOSL_LOG_INFO, "Received audio frame #%d, size=%zu bytes, ts=%u",
+        aosl_log(AOSL_LOG_INFO, "Received audio frame #%d, size=%zu bytes, ts=%u, saved to file",
                 g_audio_frame_count, frame_len, timestamp);
     }
 }
@@ -69,10 +78,17 @@ static void on_video_frame(void *user_data, tinyrtc_track_t *track,
      * encoded frames ready for decoding. */
     (void)user_data;
     (void)track;
-    (void)frame;
+    (void)timestamp;
+
+    /* Save the encoded frame to file */
+    if (g_video_file && frame_len > 0) {
+        fwrite(frame, 1, frame_len, g_video_file);
+        fflush(g_video_file);
+    }
+
     g_video_frame_count++;
     if (g_video_frame_count % 30 == 1) {
-        aosl_log(AOSL_LOG_INFO, "Received video frame #%d, size=%zu bytes, ts=%u",
+        aosl_log(AOSL_LOG_INFO, "Received video frame #%d, size=%zu bytes, ts=%u, saved to file",
                 g_video_frame_count, frame_len, timestamp);
     }
 }
@@ -154,6 +170,16 @@ int main(int argc, char **argv)
     }
 
     g_pc = pc;
+
+    /* Open files to save received frames */
+    g_audio_file = fopen("output_audio.opus", "wb");
+    g_video_file = fopen("output_video.h264", "wb");
+    if (g_audio_file) {
+        aosl_log(AOSL_LOG_INFO, "Saving received audio to output_audio.opus");
+    }
+    if (g_video_file) {
+        aosl_log(AOSL_LOG_INFO, "Saving received video to output_video.h264");
+    }
 
     /* Add media tracks we are willing to receive */
     tinyrtc_track_config_t video_config = {0};
@@ -309,6 +335,15 @@ int main(int argc, char **argv)
 cleanup:
     if (g_pending_offer) {
         aosl_free(g_pending_offer);
+    }
+    /* Close output files */
+    if (g_audio_file) {
+        fclose(g_audio_file);
+        aosl_log(AOSL_LOG_INFO, "Saved audio frames to output_audio.opus");
+    }
+    if (g_video_file) {
+        fclose(g_video_file);
+        aosl_log(AOSL_LOG_INFO, "Saved video frames to output_video.h264");
     }
     g_pc = NULL;
     tinyrtc_peer_connection_destroy(pc);
