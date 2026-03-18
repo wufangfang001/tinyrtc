@@ -176,6 +176,18 @@ static inline char *tinyrtc_strdup(const char *str)
         } \
     } while (0)
 
+/* =============================================================================
+ * Forward declarations
+ * ========================================================================== */
+
+struct tinyrtc_context {
+    tinyrtc_config_t config;
+    tinyrtc_log_level_t log_level;
+    aosl_lock_t mutex;      /* For thread safety when accessing global state */
+    int num_peers;          /* Number of active peer connections */
+    tinyrtc_signaling_t *signaling;  /* Global signaling client (if used) */
+};
+
 #ifdef __cplusplus
 }
 #endif

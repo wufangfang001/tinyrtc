@@ -10,23 +10,11 @@
 
 #include "common.h"
 #include "tinyrtc/tinyrtc.h"
+#include "tinyrtc/signaling.h"
 
 /* =============================================================================
- * TinyRTC context structure - internal implementation
+ * TinyRTC context structure - definition now in src/include/common.h
  * ========================================================================== */
-
-struct tinyrtc_context {
-    tinyrtc_config_t config;
-    tinyrtc_log_level_t log_level;
-    aosl_lock_t mutex;  /* For thread safety when accessing global state */
-    int num_peers;        /* Number of active peer connections */
-
-    /* TODO: Add more fields as we implement modules:
-     * - List of active peer connections
-     * - Timers for processing
-     * - Network event queue
-     */
-};
 
 /* =============================================================================
  * Static data - error code strings
@@ -137,6 +125,14 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
 
     /* Lock the context for thread safety */
     aosl_lock_lock(ctx->mutex);
+
+    /* Process signaling messages */
+    if (ctx->signaling) {
+        int ret = tinyrtc_signaling_process(ctx->signaling);
+        if (ret > 0) {
+            events_processed += ret;
+        }
+    }
 
     /* TODO:
      * 1. Process network events (socket polling)

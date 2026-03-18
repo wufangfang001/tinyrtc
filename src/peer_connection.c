@@ -20,12 +20,6 @@
  * We just need to declare it here since common.h is already included, and the
  * definition is compatible because it's the same translation unit layout.
  */
-struct tinyrtc_context {
-    tinyrtc_config_t config;
-    tinyrtc_log_level_t log_level;
-    aosl_lock_t mutex;  /* For thread safety when accessing global state */
-    int num_peers;        /* Number of active peer connections */
-};
 
 /* =============================================================================
  * Public API implementation - Creation/Destruction

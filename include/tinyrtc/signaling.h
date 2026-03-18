@@ -122,6 +122,16 @@ void tinyrtc_signaling_disconnect(tinyrtc_signaling_t *sig);
 tinyrtc_signaling_state_t tinyrtc_signaling_get_state(tinyrtc_signaling_t *sig);
 
 /**
+ * @brief Process pending incoming messages from signaling server
+ *
+ * This should be called periodically from the main loop
+ *
+ * @param sig Signaling connection
+ * @return Number of events processed
+ */
+int tinyrtc_signaling_process(tinyrtc_signaling_t *sig);
+
+/**
  * @brief Send offer to remote peer
  *
  * @param sig Signaling connection

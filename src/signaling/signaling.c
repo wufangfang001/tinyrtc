@@ -4,8 +4,13 @@
  */
 
 #include "tinyrtc/signaling.h"
+#include "tinyrtc/tinyrtc.h"
 #include "common.h"
 #include "api/aosl.h"
+
+/* Forward declaration */
+struct tinyrtc_context;
+
 #include <tinyrtc/tinyrtc.h>
 
 #include <stdio.h>
@@ -1201,4 +1206,29 @@ tinyrtc_error_t tinyrtc_signaling_send_candidate(
     /* TODO: implement when we have full ICE candidate support in TinyRTC */
     aosl_log(AOSL_LOG_DEBUG, "Signaling: ICE candidate sending not implemented yet");
     return TINYRTC_OK;
+}
+
+int tinyrtc_signaling_process(tinyrtc_signaling_t *sig)
+{
+    if (!sig || sig->state != TINYRTC_SIGNALING_CONNECTED) {
+        return 0;
+    }
+
+    int events_processed = 0;
+
+    /* Read as much as possible */
+    while (true) {
+        int ret = sig_read_ws_frame(sig);
+        if (ret < 0) {
+            /* Error, close connection */
+            sig->state = TINYRTC_SIGNALING_DISCONNECTED;
+            break;
+        } else if (ret == 0) {
+            /* No more data available right now */
+            break;
+        }
+        events_processed++;
+    }
+
+    return events_processed;
 }
