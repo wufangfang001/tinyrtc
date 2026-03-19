@@ -74,11 +74,10 @@ async def handle_client(reader, writer):
     
     try:
         while True:
-            # Read WebSocket frame
+            # Read WebSocket frame header byte by byte
             first_byte = await reader.read(1)
             if not first_byte:
                 break
-            
             b1 = first_byte[0]
             fin = (b1 & 0x80) != 0
             opcode = b1 & 0x0F
@@ -87,37 +86,44 @@ async def handle_client(reader, writer):
             second_byte = await reader.read(1)
             if not second_byte:
                 break
-            
             b2 = second_byte[0]
             mask = (b2 & 0x80) != 0
             payload_len = b2 & 0x7F
             print(f"Frame second byte: mask={mask} payload_len(7bit)={payload_len}")
             
-            # Extended length
+            # Extended payload length - read after second byte
             if payload_len == 126:
-                ext_len = await reader.read(2)
-                payload_len = int.from_bytes(ext_len, byteorder='big')
-                print(f"  Extended payload length (16-bit): {payload_len}, ext_bytes=[{ext_len[0]:02x} {ext_len[1]:02x}]")
+                ext_len_bytes = await reader.read(2)
+                if len(ext_len_bytes) < 2:
+                    print(f"ERROR: incomplete extended length, got {len(ext_len_bytes)} bytes, breaking")
+                    break
+                payload_len = int.from_bytes(ext_len_bytes, byteorder='big')
+                print(f"  Extended payload length (16-bit): {payload_len}, ext_bytes=[{ext_len_bytes[0]:02x} {ext_len_bytes[1]:02x}]")
             elif payload_len == 127:
-                ext_len = await reader.read(8)
-                payload_len = int.from_bytes(ext_len, byteorder='big')
+                ext_len_bytes = await reader.read(8)
+                payload_len = int.from_bytes(ext_len_bytes, byteorder='big')
                 print(f"  Extended payload length (64-bit): {payload_len}")
             
-            # Client to server must be masked
+            # Masking key - read after extended length
+            mask_key = None
             if mask:
                 mask_key = await reader.read(4)
+                if len(mask_key) < 4:
+                    print(f"ERROR: incomplete mask key, got {len(mask_key)} bytes, breaking")
+                    break
                 print(f"  Mask is present, read 4 bytes mask key: [{mask_key[0]:02x} {mask_key[1]:02x} {mask_key[2]:02x} {mask_key[3]:02x}]")
-            else:
-                mask_key = None
-                print(f"  Mask not present")
             
-            # Read payload
+            # Read payload now that header is fully parsed
             print(f"  Reading payload: expected {payload_len} bytes")
-            payload = await reader.read(payload_len)
+            payload = b''
+            while len(payload) < payload_len:
+                chunk = await reader.read(payload_len - len(payload))
+                if not chunk:
+                    break
+                payload += chunk
             print(f"  Actually got {len(payload)} bytes")
             if len(payload) < payload_len:
                 print(f"Incomplete payload: got {len(payload)} expected {payload_len}, continuing with what we have")
-                # Don't break - process what we have instead of disconnecting
             
             # Unmask
             if mask:
