@@ -335,11 +335,7 @@ document.getElementById('startAutoSignaling').addEventListener('click', async ()
         autoSignaling.socket.onmessage = (event) => {
             const data = JSON.parse(event.data);
 
-            /* Check if this message is for our room and not from us */
-            if (data.channel !== roomId) return;
-            if (data.sender === undefined) return;
-
-            /* This is from the WebRTC-Experiment protocol */
+            /* Presence check response - special case (no channel/sender) */
             if (data.isChannelPresent !== undefined) {
                 log(`Presence check response: channel present = ${data.isChannelPresent}`);
                 // If channel is already present (someone else is in the room waiting for offer)
@@ -377,6 +373,10 @@ document.getElementById('startAutoSignaling').addEventListener('click', async ()
                 }
                 return;
             }
+
+            /* Check if this message is for our room and not from us - only for normal messages */
+            if (data.channel !== roomId) return;
+            if (data.sender === undefined) return;
 
             if (!data.message) return;
 
