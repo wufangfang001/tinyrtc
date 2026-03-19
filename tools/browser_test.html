@@ -345,18 +345,12 @@ document.getElementById('startAutoSignaling').addEventListener('click', async ()
                     let pc = peerConnection;
                     if (!pc) {
                         log('peerConnection is null, creating new');
+                        // createPeerConnection automatically adds local tracks from global localStream
                         pc = createPeerConnection();
                         peerConnection = pc;
+                        // createPeerConnection already logged "Added local xxx track"
                     }
-                    log('Adding local tracks from localStream');
-                    const tracks = localStream.getTracks();
-                    log('localStream has ' + tracks.length + ' tracks');
-                    for (let i = 0; i < tracks.length; i++) {
-                        const track = tracks[i];
-                        pc.addTrack(track, localStream);
-                        log('Added local ' + track.kind + ' track');
-                    }
-                    log('All tracks added, starting createOffer...');
+                    log('All tracks already added by createPeerConnection, starting createOffer...');
                     pc.createOffer().then(offer => {
                         log('createOffer succeeded, setting local description');
                         pc.setLocalDescription(offer);
