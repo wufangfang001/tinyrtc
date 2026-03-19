@@ -138,6 +138,7 @@ async def handle_client(reader, writer):
                 response_bytes = response.encode('utf-8')
                 pl_len = len(response_bytes)
                 print(f"Sending presence response: {response} ({pl_len} bytes)")
+                sys.stdout.flush()
                 
                 # Build WebSocket text frame
                 header = bytearray()
