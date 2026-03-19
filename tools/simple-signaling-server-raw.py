@@ -122,7 +122,7 @@ async def handle_client(reader, writer):
                 current_room = room_id
                 print(f"Presence check for room: {room_id}")
                 
-                # Check if channel already has other clients
+                # Check if channel already has other clients BEFORE adding us
                 channel_present = room_id in rooms and len(rooms[room_id]) > 0
                 
                 # Add client to room
@@ -137,10 +137,11 @@ async def handle_client(reader, writer):
                 response = json.dumps({"isChannelPresent": channel_present})
                 response_bytes = response.encode('utf-8')
                 pl_len = len(response_bytes)
+                print(f"Sending presence response: {response} ({pl_len} bytes)")
                 
                 # Build WebSocket text frame
                 header = bytearray()
-                header.append(0x81)  # FIN + TEXT
+                header.append(0x81)  # FIN + TEXT (single frame)
                 
                 if pl_len <= 125:
                     header.append(pl_len)
@@ -151,7 +152,8 @@ async def handle_client(reader, writer):
                     header.append(127)
                     header.extend(pl_len.to_bytes(8, byteorder='big'))
                 
-                # Server -> client is not masked (per RFC6455)
+                # Server -> client is NOT masked (per RFC 6455 section 5.1)
+                # Only client -> server must be masked
                 writer.write(header)
                 writer.write(response_bytes)
                 await writer.drain()
