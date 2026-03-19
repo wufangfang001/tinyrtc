@@ -373,6 +373,39 @@ document.getElementById('startAutoSignaling').addEventListener('click', async ()
             /* This is from the WebRTC-Experiment protocol */
             if (data.isChannelPresent !== undefined) {
                 log(`Presence check response: channel present = ${data.isChannelPresent}`);
+                // If channel is already present (someone else is in the room waiting for offer)
+                // We need to be the offerer (browser sends offer to join)
+                if (data.isChannelPresent) {
+                    if (!peerConnection) {
+                        peerConnection = createPeerConnection();
+                    }
+                    localStream.getTracks().forEach(track => {
+                        peerConnection.addTrack(track, localStream);
+                        log('Added local ' + track.kind + ' track');
+                    });
+                    peerConnection.createOffer().then(offer => {
+                        peerConnection.setLocalDescription(offer);
+                        log('Created offer after presence check');
+                        setTimeout(() => {
+                            const msg = {
+                                sender: 'browser-' + Math.random().toString(36).substr(2),
+                                channel: roomId,
+                                message: {
+                                    type: 'offer',
+                                    sdp: offer.sdp
+                                }
+                            };
+                            autoSignaling.socket.send(JSON.stringify(msg));
+                            log('Sent offer to signaling server');
+                            statusDiv.innerHTML += `<p style="color: green;">✓ Offer sent, waiting for answer...</p>`;
+                        }, 1000);
+                    }).catch(e => {
+                        log('Failed to create offer: ' + e.message);
+                        alert('Failed to create offer: ' + e.message);
+                    });
+                } else {
+                    log('No one in room, waiting for incoming offer');
+                }
                 return;
             }
 
