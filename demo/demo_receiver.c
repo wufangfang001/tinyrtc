@@ -116,7 +116,15 @@ static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
             break;
         case TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE:
             aosl_log(AOSL_LOG_DEBUG, "Received ICE candidate from signaling\n");
-            /* TODO: add ICE candidate API to TinyRTC */
+            if (g_pc && event->data.candidate) {
+                tinyrtc_error_t err = tinyrtc_peer_connection_add_ice_candidate(g_pc, event->data.candidate);
+                if (err != TINYRTC_OK) {
+                    aosl_log(AOSL_LOG_ERROR, "Failed to add ICE candidate: %s\n",
+                            tinyrtc_get_error_string(err));
+                } else {
+                    aosl_log(AOSL_LOG_DEBUG, "ICE candidate added successfully\n");
+                }
+            }
             break;
         default:
             break;

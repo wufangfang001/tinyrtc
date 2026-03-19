@@ -1,5 +1,21 @@
 # API Changes
 
+## 2026-03-19 - Implement ICE candidate handling in demo apps
+
+**文件**：`demo/demo_receiver.c`, `demo/demo_sender.c`
+
+**修改内容**：
+
+- 实现了 `TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE` 事件处理
+- 调用 `tinyrtc_peer_connection_add_ice_candidate()` 添加远程ICE candidate
+- 之前只是TODO占位，现在连接可以正常建立了
+
+**影响**：
+- Fixes connection stuck after offer/answer exchange
+- Demo applications now can complete ICE connection and receive media
+
+---
+
 ## 2026-03-19 - Fix WebSocket handshake accept-key calculation
 
 **文件**：`src/signaling/signaling.c`

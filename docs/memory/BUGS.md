@@ -30,3 +30,19 @@
 **修复方案**：重新完整编译，cmake重新配置rpath后解决。
 
 **状态**：✅ 已修复
+
+---
+
+## ICE candidates 没有处理，连接卡住无法建立
+
+**问题描述**：WebSocket握手成功，信令连接建立，offer/answer交换完成，但连接始终无法进入CONNECTED状态，没有音视频帧输出。
+
+**根本原因**：
+- demo代码（`demo_receiver.c` 和 `demo_sender.c`）中，对 `TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE` 事件只是TODO占位，没有实际调用API添加ICE candidate
+- ICE Agent收不到远程candidate，无法进行连通性检查，所以连接无法建立
+
+**修复方案**：
+- 在signaling_callback中处理 `TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE` 事件
+- 调用已存在的API `tinyrtc_peer_connection_add_ice_candidate()` 添加远程ICE candidate
+
+**状态**：✅ 已修复
