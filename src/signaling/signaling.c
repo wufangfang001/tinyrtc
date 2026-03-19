@@ -663,8 +663,26 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
      * }
      */
 
-    /* Check for presence check response */
+    /* Check for presence check response - only match if it's a top-level key
+     * Previously we used strstr which could match inside sdp and cause false positives
+     */
+    bool is_presence_response = false;
     if (strstr(json, "\"isChannelPresent\"") != NULL) {
+        /* Check if it's at top level - look before the first { after the key doesn't have another { before it
+         * This is still simplistic but good enough to avoid false positives
+         */
+        char *pos = strstr(json, "\"isChannelPresent\"");
+        int braces = 0;
+        for (char *p = json; p < pos; p++) {
+            if (*p == '{') braces++;
+            else if (*p == '}') braces--;
+        }
+        // If braces == 0, this is top-level key, it's a presence response
+        if (braces == 0) {
+            is_presence_response = true;
+        }
+    }
+    if (is_presence_response) {
         /* This is just the presence response, ignore it */
         aosl_log(AOSL_LOG_DEBUG, "Signaling: got presence check response");
         aosl_free(json);
