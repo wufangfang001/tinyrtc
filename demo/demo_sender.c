@@ -81,6 +81,8 @@ static void on_video_frame(void *user_data, tinyrtc_track_t *track,
 /* Global for signaling callback */
 static tinyrtc_peer_connection_t *g_pc = NULL;
 static bool g_got_answer = false;
+static tinyrtc_track_t *g_video_track = NULL;
+static tinyrtc_track_t *g_audio_track = NULL;
 
 static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
 {
@@ -172,7 +174,7 @@ int main(int argc, char **argv)
     video_config.mid = "v0";
     video_config.codec_id = TINYRTC_CODEC_H264;
     /* payload_type and clock_rate auto-filled from codec defaults */
-    tinyrtc_track_t *video_track = tinyrtc_peer_connection_add_track(pc, &video_config);
+    g_video_track = tinyrtc_peer_connection_add_track(pc, &video_config);
 
     /* Add audio track (we send audio) */
     tinyrtc_track_config_t audio_config = {0};
@@ -180,7 +182,7 @@ int main(int argc, char **argv)
     audio_config.mid = "a0";
     audio_config.codec_id = TINYRTC_CODEC_OPUS;
     /* payload_type and clock_rate auto-filled from codec defaults */
-    tinyrtc_peer_connection_add_track(pc, &audio_config);
+    g_audio_track = tinyrtc_peer_connection_add_track(pc, &audio_config);
 
     /* Check for manual mode with answer from previous step */
     if (!auto_signaling && argc == 3 && strcmp(argv[1], "--with-answer") == 0) {
@@ -264,14 +266,87 @@ int main(int argc, char **argv)
         aosl_log(AOSL_LOG_INFO, "Open browser_test.html and enter room-id: %s\n", room_id);
         aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
 
+        /* Open video and audio files if they exist */
+        FILE *video_file = fopen("test.264", "rb");
+        FILE *audio_file = fopen("test.opus", "rb");
+        if (video_file) {
+            aosl_log(AOSL_LOG_INFO, "Found test.264, will send H.264 video frames\n");
+        }
+        if (audio_file) {
+            aosl_log(AOSL_LOG_INFO, "Found test.opus, will send Opus audio frames\n");
+        }
+
+        /* Calculate timestamp increment for 30fps video */
+        uint32_t video_timestamp = 0;
+        uint32_t audio_timestamp = 0;
+        const uint32_t video_inc = 90000 / 30;  /* 90kHz clock, 30fps */
+        const uint32_t audio_inc = 48000 / 50;  /* 48kHz clock, 50 packets/sec */
+
         /* Main loop: poll signaling and process TinyRTC events */
+        int frame_count = 0;
         while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
             /* Process signaling messages */
-            /* Note: signaling doesn't need explicit poll, because we use blocking
-             * read which will be processed in this loop */
             tinyrtc_process_events(ctx, 100);
-            aosl_msleep(10);
+
+            /* If connected and we have a video file, send next NAL unit (frame) */
+            if (tinyrtc_peer_connection_get_state(pc) == TINYRTC_PC_STATE_CONNECTED &&
+                video_file && g_video_track) {
+                /* Read one NAL unit (H.264 frame) - simple byte-by-byte scan for start code */
+                uint8_t buffer[1024 * 1024];  /* 1MB max frame size */
+                int pos = 0;
+                int c;
+                /* Skip any leading 0x00 */
+                while ((c = fgetc(video_file)) != EOF) {
+                    if (c != 0) break;
+                    if (pos < (int)sizeof(buffer)) {
+                        buffer[pos++] = c;
+                    }
+                }
+                if (c == EOF) {
+                    /* End of file, rewind */
+                    rewind(video_file);
+                    continue;
+                }
+                buffer[pos++] = c;
+                /* Read until next start code (0x00 00 00 01) or EOF */
+                int zero_count = 0;
+                while ((c = fgetc(video_file)) != EOF) {
+                    if (pos < (int)sizeof(buffer) - 4) {
+                        buffer[pos++] = c;
+                    }
+                    if (c == 0) {
+                        zero_count++;
+                    } else {
+                        if (zero_count >= 3 && c == 1) {
+                            /* Found next start code - ungetc the last 4 bytes */
+                            for (int i = 0; i < 4 && pos >= 4; i++) {
+                                ungetc(buffer[--pos], video_file);
+                            }
+                            break;
+                        }
+                        zero_count = 0;
+                    }
+                }
+                if (pos > 0) {
+                    tinyrtc_track_send_video_frame(g_video_track, buffer, pos, video_timestamp);
+                    video_timestamp += video_inc;
+                    frame_count++;
+                    if (frame_count % 30 == 1) {
+                        aosl_log(AOSL_LOG_INFO, "Sent video frame #%d, size=%d bytes\n", frame_count, pos);
+                    }
+                }
+            }
+
+            /* TODO: send audio frames from file if available */
+            tinyrtc_process_events(ctx, 100);
+            aosl_msleep(33);  /* ~30fps */
         }
+
+        if (video_file) fclose(video_file);
+        if (audio_file) fclose(audio_file);
+
+        tinyrtc_free(offer_sdp);
+        tinyrtc_signaling_destroy(sig);
 
         tinyrtc_free(offer_sdp);
         tinyrtc_signaling_destroy(sig);
