@@ -171,8 +171,8 @@ static void sig_compute_accept_key(const char *client_key, char *accept, size_t 
     mbedtls_sha1_free(&ctx);
 
     /* Base64 encode
-     * SHA-1 always outputs exactly 20 bytes (160 bits)
-     * Use bit accumulation approach that's guaranteed to be correct
+     * SHA-1 always outputs exactly 20 bytes (160 bits) → 28 base64 chars
+     * Use simpler fixed approach since we know the exact output length
      */
     static const char *b64 =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -181,25 +181,25 @@ static void sig_compute_accept_key(const char *client_key, char *accept, size_t 
     uint32_t accum = 0;
     int j = 0;
 
-    // SHA-1 (20 bytes = 160 bits) always produces 28 base64 characters
-    // Leave space at the end for null terminator (we need at least 29 bytes total)
-    for (int i = 0; i < 20 && j < (int)accept_len - 2; i++) {
+    // Process all 20 bytes - we know we need exactly 28 characters max
+    // Keep going until all bits are processed, don't stop early
+    for (int i = 0; i < 20; i++) {
         accum = (accum << 8) | hash[i];
         bits += 8;
-        while (bits >= 6 && j < (int)accept_len - 2) {
+        while (bits >= 6 && j < 28 && j < (int)accept_len - 1) {
             bits -= 6;
             accept[j++] = b64[(accum >> bits) & 0x3F];
         }
     }
 
     // Add remaining bits if any
-    if (bits > 0 && j < (int)accept_len - 2) {
+    if (bits > 0 && j < 28 && j < (int)accept_len - 1) {
         accum <<= (6 - bits);
         accept[j++] = b64[accum & 0x3F];
     }
 
     // Add padding to make output length multiple of 4
-    while (j % 4 != 0 && j < (int)accept_len - 1) {
+    while (j % 4 != 0 && j < 28 && j < (int)accept_len - 1) {
         accept[j++] = '=';
     }
 
