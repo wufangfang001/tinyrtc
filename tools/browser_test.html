@@ -348,7 +348,9 @@ document.getElementById('startAutoSignaling').addEventListener('click', async ()
                         peerConnection.addTrack(track, localStream);
                         log('Added local ' + track.kind + ' track');
                     });
+                    log('Starting createOffer...');
                     peerConnection.createOffer().then(offer => {
+                        log('createOffer succeeded, setting local description');
                         peerConnection.setLocalDescription(offer);
                         log('Created offer after presence check');
                         setTimeout(() => {
@@ -366,6 +368,7 @@ document.getElementById('startAutoSignaling').addEventListener('click', async ()
                         }, 1000);
                     }).catch(e => {
                         log('Failed to create offer: ' + e.message);
+                        console.error('createOffer error:', e);
                         alert('Failed to create offer: ' + e.message);
                     });
                 } else {
