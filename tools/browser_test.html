@@ -342,22 +342,24 @@ document.getElementById('startAutoSignaling').addEventListener('click', async ()
                 // We need to be the offerer (browser sends offer to join)
                 if (data.isChannelPresent) {
                     log('data.isChannelPresent is true, preparing to create offer');
-                    if (!peerConnection) {
+                    let pc = peerConnection;
+                    if (!pc) {
                         log('peerConnection is null, creating new');
-                        peerConnection = createPeerConnection();
+                        pc = createPeerConnection();
+                        peerConnection = pc;
                     }
                     log('Adding local tracks from localStream');
                     const tracks = localStream.getTracks();
                     log('localStream has ' + tracks.length + ' tracks');
                     for (let i = 0; i < tracks.length; i++) {
                         const track = tracks[i];
-                        peerConnection.addTrack(track, localStream);
+                        pc.addTrack(track, localStream);
                         log('Added local ' + track.kind + ' track');
                     }
                     log('All tracks added, starting createOffer...');
-                    peerConnection.createOffer().then(offer => {
+                    pc.createOffer().then(offer => {
                         log('createOffer succeeded, setting local description');
-                        peerConnection.setLocalDescription(offer);
+                        pc.setLocalDescription(offer);
                         log('Created offer after presence check');
                         setTimeout(() => {
                             log('Timeout done, sending offer now');
