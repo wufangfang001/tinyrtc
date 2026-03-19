@@ -1,35 +1,20 @@
-# API Changes - API变更历史
+# API Changes
 
-This file records backward-incompatible API changes and major feature additions.
+## 2026-03-19 - Fix WebSocket handshake accept-key calculation
 
-## [Unreleased] - 2026-03-18
+**文件**：`src/signaling/signaling.c`
 
-### Added
-- Initial public API: `tinyrtc_init()`, `tinyrtc_destroy()`
-- PeerConnection API: `tinyrtc_peer_connection_create()`, `tinyrtc_peer_connection_destroy()`
-- Track management: `tinyrtc_peer_connection_add_track()`, `tinyrtc_track_send_rtp()`
-- SDP: `tinyrtc_peer_connection_create_offer()`, `tinyrtc_peer_connection_set_remote_description()`
-- Event processing: `tinyrtc_process_events()`
+**修改内容**：
 
-### Changed
-- N/A (initial release)
+1. `sig_perform_websocket_handshake()`:
+   - Changed `expected_accept[32]` → `expected_accept[29]`
+   - Reason: SHA-1 (20 bytes) always produces exactly 28 base64 characters, need 28 + 1 null = 29 bytes
 
-### Removed
-- N/A (initial release)
+2. `sig_compute_accept_key()`:
+   - Removed unnecessary buffer size checks in all loops (main loop, remaining bits, padding)
+   - Since output size is fixed at 28 bytes and we have enough buffer space, checks are redundant
+   - This ensures we always generate the full base64 string including padding
 
----
-
-## Template for future changes:
-
-```
-## [Release] - YYYY-MM-DD
-
-### Added
-- New features
-
-### Changed
-- Changes to existing functionality
-
-### Removed
-- Removed APIs
-```
+**影响**：
+- Fixes WebSocket handshake failure when connecting to signaling server
+- No API changes, just bug fix

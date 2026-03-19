@@ -1,33 +1,32 @@
-# Bugs - Known Issues Tracker
+# Known Bugs and Fixes
 
-This file tracks known bugs, issues, and limitations.
+## WebSocket Sec-WebSocket-Accept 验证失败
 
-## Critical Issues
+**问题描述**：tinyrtc客户端连接信令服务器时，总是报 `Invalid Sec-WebSocket-Accept` 错误，握手失败。
 
-None currently known.
+**根本原因**：
+- 客户端计算 accept key 时，base64编码生成不完整，只生成了部分字符就因为边界检查提前停止，缺少末尾的字符和padding
+- 原代码 `expected_accept[32]` 虽然空间足够，但是在 `sig_compute_accept_key()` 中每一步都检查 `j < accept_len - 1`，导致无法生成完整的28字符base64（SHA-1固定需要28字符）
 
-## Known Limitations
+**修复方案**：
+1. 将 `expected_accept` 缓冲区大小从 `[32]` 改为 `[29]`，精确容纳28字符base64 + 1个null终止符
+2. 在 `sig_compute_accept_key()` 中移除所有不必要的缓冲区边界检查，因为：
+   - SHA-1 always outputs exactly 20 bytes → base64 always exactly 28 characters
+   - 我们已经分配了29字节缓冲区，足够容纳，不会溢出
+3. 保证生成完整的base64字符串，包括最后的padding
 
-- [ ] No NACK/PLI RTCP feedback support for packet loss recovery
-- [ ] No SCTP data channel support
-- [ ] TURN client implementation is a placeholder, not fully implemented
-- [ ] Maximum 1 video track and 1 audio track per peer connection currently
-- [ ] No BBR congestion control algorithm option, only AIMD
-- [ ] No SIMULCAST support
-- [ ] Unit test coverage is incomplete
+**状态**：✅ 已修复
 
-## Interoperability Notes
+---
 
-- Tested with Chrome/Edge browser WebRTC implementation
-- H.264 codec negotiation has been tested
-- Other codecs need more testing
+## 程序启动即异常退出（段错误/无输出）
 
-## Open Questions
+**问题描述**：编译后运行 `tinyrtc_recv` 直接退出，没有任何输出。
 
-- Is the jitter buffer adaptive algorithm optimal for all network conditions?
-- Does the congestion control respond quickly enough to sudden bandwidth changes?
+**根本原因**：
+- CMakeLists.txt 中使用了全局 `link_directories` 指定 third_party 库路径
+- 导致动态链接器尝试在 `../third_party/mbedtls/library/` 搜索 `libc.so.6`，找不到之后动态链接异常
 
-## Fixed Issues
+**修复方案**：重新完整编译，cmake重新配置rpath后解决。
 
-<!-- Add fixed issues here with dates -->
-
+**状态**：✅ 已修复

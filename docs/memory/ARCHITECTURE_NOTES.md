@@ -1,108 +1,25 @@
-# Architecture Notes - 架构决策和权衡记录
+# Architecture Notes
 
-This file records key architectural decisions made during development, along with the reasoning and trade-offs considered.
+## WebSocket Accept-key Calculation
 
-## 2026-03-18: Project Initial Setup
+### Decision
 
-### Decision: Use pure GNU99 C with AOSL platform abstraction
+For SHA-1 (used in WebSocket handshake accept-key calculation):
 
-**Options considered:**
-1. **Pure C + AOSL** (chosen)
-   - Pros: Maximum portability to Linux/RTOS, minimal dependencies, small binary size
-   - Cons: More boilerplate than C++, no OOP features
-   
-2. **C++**
-   - Pros: OOP, RAII, better abstractions
-   - Cons: Some RTOS compilers have incomplete C++ support, larger binary
+- We know SHA-1 always outputs exactly **20 bytes** (160 bits)
+- Base64 encoding of 160 bits always produces exactly **28 characters** (with padding)
+- Therefore we can safely preallocate a fixed 29-byte buffer (28 + 1 null terminator)
+- Remove all runtime buffer boundary checks since they are redundant and caused bugs
 
-**Reasoning:**
-TinyRTC targets resource-constrained systems first. Pure C maximizes portability. AOSL provides modern programming primitives (list, rbtree, atomic, threads) that offset many of the disadvantages of pure C.
+### Rationale
 
----
+- Removing unnecessary checks simplifies code
+- Fixed size is guaranteed by SHA-1 algorithm spec, so no risk of buffer overflow
+- This bug would have been caught if using fixed size allocation from the beginning
 
-### Decision: mbed TLS 2.28 LTS for crypto
+### Consequences
 
-**Options considered:**
-1. **mbed TLS 2.28** (chosen)
-   - Pros: Actively maintained LTS, small footprint, complete DTLS/SRTP support
-   - Cons: 2.x API is older than 3.x
-   
-2. **mbed TLS 3.x**
-   - Pros: Newer API
-   - Cons: Incompatible API changes, not all RTOS platforms have updated yet
-
-3. **OpenSSL**
-   - Pros: Feature complete
-   - Cons: Too large for embedded systems
-
-**Reasoning:**
-Size compatibility with embedded systems is more important than latest API. 2.28 is LTS until 2025-03.
-
----
-
-### Decision: Application provides encoded RTP, no codecs inside TinyRTC
-
-**Options considered:**
-1. **No codecs (chosen)** - TinyRTC only handles RTP/ICE/DTLS
-   - Pros: Small size, application can use whatever codecs they want (software/hardware)
-   - Cons: Application needs to integrate codecs separately
-   
-2. **include reference software codecs**
-   - Pros: Easier for getting started
-   - Cons: Increases binary size, duplication with platform codec support
-
-**Reasoning:**
-On many embedded platforms, codecs are provided by hardware. Including software codecs would bloat the library unnecessarily.
-
----
-
-### Decision: Single-threaded main loop with asynchronous processing
-
-**Options considered:**
-1. **Single-threaded main loop** (default, chosen)
-   - Pros: Simple, no locking overhead, predictable latency
-   - Cons: Cannot utilize multiple cores for processing
-   
-2. **Multi-threaded by design**
-   - Pros: Can parallelize work
-   - Cons: More complex, requires more synchronization, higher memory usage
-
-**Reasoning:**
-Most use cases on embedded/RTOS run TinyRTC on a dedicated core. Single-threaded is simpler and easier to debug. AOSL allows offloading heavy work to thread pools when needed.
-
----
-
-### Decision: AIMD congestion control as default
-
-**Options considered:**
-1. **AIMD** (chosen)
-   - Pros: Simple, well-understood, small code footprint
-   - Cons: Slower response to bandwidth changes than BBR
-   
-2. **BBR**
-   - Pros: Better throughput on long fat networks
-   - Cons: More complex, larger code, requires accurate timing measurements
-
-**Reasoning:**
-AIMD is the WebRTC standard default. BBR can be added as an optional plugin later.
-
----
-
-## 2026-03-18: Unit Testing
-
-### Decision: Integrate minunit for unit testing
-
-**Options considered:**
-1. **minunit** (chosen)
-   - Pros: Single header file, zero dependencies, extremely simple
-   - Cons: Very basic, no fancy features
-   
-2. **Check** (C unit testing framework)
-   - Pros: More features, assertions, memory leak detection
-   - Cons: Requires linking, adds build dependency
-
-**Reasoning:**
-For a small project like TinyRTC, simplicity is key. minunit is sufficient for our needs and doesn't add any build complexity.
-
----
-
+- + Simpler code
+- + Fixes handshake failure bug
+- + No runtime size check overhead
+- - If algorithm changes in future, need to adjust buffer size (very unlikely for WebSocket spec)
