@@ -122,13 +122,40 @@ async def handle_client(reader, writer):
                 current_room = room_id
                 print(f"Presence check for room: {room_id}")
                 
+                # Check if channel already has other clients
+                channel_present = room_id in rooms and len(rooms[room_id]) > 0
+                
                 # Add client to room
                 if room_id not in rooms:
                     rooms[room_id] = []
                 # Find client id from message
                 client_id = "tinyrtc-" + str(id(writer))
                 rooms[room_id].append((writer, client_id))
-                print(f"Client added to room {room_id}, total {len(rooms[room_id])} clients")
+                print(f"Client added to room {room_id}, total {len(rooms[room_id])} clients, channel_present={channel_present}")
+                
+                # Send presence check response back to client
+                response = json.dumps({"isChannelPresent": channel_present})
+                response_bytes = response.encode('utf-8')
+                pl_len = len(response_bytes)
+                
+                # Build WebSocket text frame
+                header = bytearray()
+                header.append(0x81)  # FIN + TEXT
+                
+                if pl_len <= 125:
+                    header.append(pl_len)
+                elif pl_len <= 0xFFFF:
+                    header.append(126)
+                    header.extend(pl_len.to_bytes(2, byteorder='big'))
+                else:
+                    header.append(127)
+                    header.extend(pl_len.to_bytes(8, byteorder='big'))
+                
+                # Server -> client is not masked (per RFC6455)
+                writer.write(header)
+                writer.write(response_bytes)
+                await writer.drain()
+                
                 continue
             
             # Normal message
