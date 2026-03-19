@@ -116,8 +116,8 @@ async def handle_client(reader, writer):
             payload = await reader.read(payload_len)
             print(f"  Actually got {len(payload)} bytes")
             if len(payload) < payload_len:
-                print(f"Incomplete payload: got {len(payload)} expected {payload_len}")
-                break
+                print(f"Incomplete payload: got {len(payload)} expected {payload_len}, continuing with what we have")
+                # Don't break - process what we have instead of disconnecting
             
             # Unmask
             if mask:
