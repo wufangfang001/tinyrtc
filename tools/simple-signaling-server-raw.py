@@ -86,18 +86,24 @@ async def handle_client(reader, writer):
             if payload_len == 126:
                 ext_len = await reader.read(2)
                 payload_len = int.from_bytes(ext_len, byteorder='big')
+                print(f"Extended payload length (16-bit): {payload_len}")
             elif payload_len == 127:
                 ext_len = await reader.read(8)
                 payload_len = int.from_bytes(ext_len, byteorder='big')
+                print(f"Extended payload length (64-bit): {payload_len}")
             
             # Client to server must be masked
             if mask:
                 mask_key = await reader.read(4)
+                print(f"Mask is present, read 4 bytes mask key")
             else:
                 mask_key = None
+                print(f"Mask not present")
             
             # Read payload
+            print(f"Reading payload: expected {payload_len} bytes")
             payload = await reader.read(payload_len)
+            print(f"Actually got {len(payload)} bytes")
             if len(payload) < payload_len:
                 print(f"Incomplete payload: got {len(payload)} expected {payload_len}")
                 break
