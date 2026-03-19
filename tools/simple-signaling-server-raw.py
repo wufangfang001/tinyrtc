@@ -234,7 +234,7 @@ async def handle_client(reader, writer):
                                 count += 1
                             except Exception as e:
                                 print(f"Failed to send to client: {e}")
-                    print(f"Forwarded message to {count} clients in room {room_id}")
+                    print(f"Forwarded message to {count} clients in room {room_id}, full payload size={len(decoded_payload)} bytes, {len(payload_bytes)=}")
                     
     except Exception as e:
         print(f"Exception: {e}")
