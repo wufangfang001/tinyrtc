@@ -171,15 +171,15 @@ static void sig_compute_accept_key(const char *client_key, char *accept, size_t 
     mbedtls_sha1_free(&ctx);
 
     /* Base64 encode
-     * SHA-1 always outputs exactly 20 bytes (160 bits) → 28 base64 chars
+     * SHA-1 always outputs exactly 20 bytes (160 bits) → 27 base64 chars + 1 padding = 28 total
      * Use a straightforward approach that guarantees we output all bits
      */
     static const char *b64 =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 
     int j = 0;
-    // 20 bytes = 160 bits, we need exactly 28 6-bit groups
-    for (int group = 0; group < 28 && j < (int)accept_len - 1; group++) {
+    // 20 bytes = 160 bits, output exactly 27 6-bit groups
+    for (int group = 0; group < 27 && j < (int)accept_len - 1; group++) {
         int byte_idx = (group * 6) / 8;
         int bit_offset = (group * 6) % 8;
         uint8_t b1 = hash[byte_idx];
@@ -189,7 +189,7 @@ static void sig_compute_accept_key(const char *client_key, char *accept, size_t 
         val &= 0x3F;
         accept[j++] = b64[val];
     }
-    // Add padding if needed (should always be 28 for SHA-1)
+    // Add padding to make total length multiple of 4 (always needs 1 padding for 20 bytes SHA-1)
     while (j % 4 != 0 && j < (int)accept_len - 1) {
         accept[j++] = '=';
     }
