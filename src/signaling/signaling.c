@@ -182,24 +182,24 @@ static void sig_compute_accept_key(const char *client_key, char *accept, size_t 
     int j = 0;
 
     // SHA-1 (20 bytes = 160 bits) always produces 28 base64 characters
-    // Since we have at least 29 bytes (28 + null), we can safely generate all
-    for (int i = 0; i < 20; i++) {
+    // Leave space at the end for null terminator (we need at least 29 bytes total)
+    for (int i = 0; i < 20 && j < (int)accept_len - 5; i++) {
         accum = (accum << 8) | hash[i];
         bits += 8;
-        while (bits >= 6) {
+        while (bits >= 6 && j < (int)accept_len - 2) {
             bits -= 6;
             accept[j++] = b64[(accum >> bits) & 0x3F];
         }
     }
 
     // Add remaining bits if any
-    if (bits > 0) {
+    if (bits > 0 && j < (int)accept_len - 2) {
         accum <<= (6 - bits);
         accept[j++] = b64[accum & 0x3F];
     }
 
     // Add padding to make output length multiple of 4
-    while (j % 4 != 0) {
+    while (j % 4 != 0 && j < (int)accept_len - 1) {
         accept[j++] = '=';
     }
 
@@ -310,7 +310,7 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
     }
 
     /* Check Sec-WebSocket-Accept */
-    char expected_accept[29]; // SHA-1 always produces exactly 28 bytes base64 + 1 null terminator = 29
+    char expected_accept[32]; // SHA-1 always produces exactly 28 bytes base64 + 1 null terminator, extra space to avoid overflow
     sig_compute_accept_key(client_key, expected_accept, sizeof(expected_accept));
     aosl_log(AOSL_LOG_DEBUG, "Signaling: computed accept: '%s' (len=%zu)", expected_accept, strlen(expected_accept));
 

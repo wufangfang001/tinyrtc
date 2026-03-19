@@ -27,12 +27,25 @@ async def handle_client(reader, writer):
     # Find Sec-WebSocket-Key
     key = None
     room_id = None
+    print(f"Received request:\n{request}")
     for line in request.split('\r\n'):
         if line.startswith('Sec-WebSocket-Key: '):
             key = line.split(': ', 1)[1]
+            break
+    
+    if key is None:
+        print("ERROR: No Sec-WebSocket-Key found in request")
+        writer.close()
+        await writer.wait_closed()
+        return
+    
+    print(f"Found Sec-WebSocket-Key: {key}")
     
     # Generate accept key
     accept = base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
+    
+    # Debug: print what we're sending
+    print(f"Generated Sec-WebSocket-Accept: {accept} (length={len(accept)})")
     
     # Send handshake response
     response = (
