@@ -183,7 +183,7 @@ static void sig_compute_accept_key(const char *client_key, char *accept, size_t 
 
     // SHA-1 (20 bytes = 160 bits) always produces 28 base64 characters
     // Leave space at the end for null terminator (we need at least 29 bytes total)
-    for (int i = 0; i < 20 && j < (int)accept_len - 5; i++) {
+    for (int i = 0; i < 20 && j < (int)accept_len - 2; i++) {
         accum = (accum << 8) | hash[i];
         bits += 8;
         while (bits >= 6 && j < (int)accept_len - 2) {
