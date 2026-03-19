@@ -19,9 +19,18 @@ GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 async def handle_client(reader, writer):
     print("New client connected")
     
-    # Read HTTP handshake request
-    request = await reader.read(4096)
-    request = request.decode('utf-8')
+    # Read HTTP handshake request line by line until we hit \r\n\r\n
+    # This way we don't read any WebSocket frame bytes that come after the HTTP handshake
+    request_lines = []
+    while True:
+        line = await reader.readline()
+        if not line:
+            break
+        request_lines.append(line.decode('utf-8'))
+        if line == b'\r\n':
+            # End of headers
+            break
+    request = ''.join(request_lines)
     # print(f"Request:\n{request}")
     
     # Find Sec-WebSocket-Key
