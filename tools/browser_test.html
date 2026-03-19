@@ -322,45 +322,14 @@ document.getElementById('startAutoSignaling').addEventListener('click', async ()
             autoSignaling.connected = true;
             statusDiv.innerHTML += `<p style="color: green;">✓ Connected to signaling server</p>`;
 
-            /* Send presence check */
+            /* Send presence check - we MUST wait for response before creating offer
+             * If room already has someone waiting, we create offer; otherwise we wait
+             */
             autoSignaling.socket.send(JSON.stringify({
                 checkPresence: true,
                 channel: roomId
             }));
             log(`Sent presence check for room: ${roomId}`);
-
-            /* If we're the offerer (browser -> TinyRTC), create offer */
-            if (!peerConnection) {
-                peerConnection = createPeerConnection();
-            }
-
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-                log('Added local ' + track.kind + ' track');
-            });
-
-            peerConnection.createOffer().then(offer => {
-                peerConnection.setLocalDescription(offer);
-                log('Created offer, waiting for presence response...');
-
-                /* Wait a bit then send offer */
-                setTimeout(() => {
-                    const msg = {
-                        sender: 'browser-' + Math.random().toString(36).substr(2),
-                        channel: roomId,
-                        message: {
-                            type: 'offer',
-                            sdp: offer.sdp
-                        }
-                    };
-                    autoSignaling.socket.send(JSON.stringify(msg));
-                    log('Sent offer to signaling server');
-                    statusDiv.innerHTML += `<p style="color: green;">✓ Offer sent, waiting for answer...</p>`;
-                }, 1000);
-            }).catch(e => {
-                log('Failed to create offer: ' + e.message);
-                alert('Failed to create offer: ' + e.message);
-            });
         };
 
         autoSignaling.socket.onmessage = (event) => {
