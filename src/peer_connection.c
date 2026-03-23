@@ -12,6 +12,7 @@
 #include "common.h"
 #include "media.h"
 #include "sdp_internal.h"
+#include "ice_internal.h"
 #include "peer_connection_internal.h"
 #include "tinyrtc/peer_connection.h"
 
@@ -61,6 +62,19 @@ tinyrtc_peer_connection_t *tinyrtc_peer_connection_create(
     /* Increment peer count */
     aosl_lock_lock(ctx->mutex);
     ctx->num_peers++;
+    /* Grow the peers array if needed */
+    if (ctx->num_peers > ctx->peers_alloc) {
+        int new_alloc = ctx->peers_alloc == 0 ? 4 : ctx->peers_alloc * 2;
+        tinyrtc_peer_connection_t **new_peers = (tinyrtc_peer_connection_t **)
+            tinyrtc_calloc(new_alloc, sizeof(tinyrtc_peer_connection_t *));
+        if (ctx->peers != NULL) {
+            memcpy(new_peers, ctx->peers, ctx->peers_alloc * sizeof(tinyrtc_peer_connection_t *));
+            tinyrtc_internal_free(ctx->peers);
+        }
+        ctx->peers = new_peers;
+        ctx->peers_alloc = new_alloc;
+    }
+    ctx->peers[ctx->num_peers - 1] = pc;
     aosl_lock_unlock(ctx->mutex);
 
     TINYRTC_LOG_DEBUG("PeerConnection created, initiator=%d", config->is_initiator);
@@ -95,8 +109,19 @@ void tinyrtc_peer_connection_destroy(tinyrtc_peer_connection_t *pc)
     /* Destroy mutex */
     aosl_lock_destroy(pc->mutex);
 
-    /* Decrement peer count in context */
+    /* Decrement peer count in context and remove from array */
     aosl_lock_lock(pc->ctx->mutex);
+    /* Find and remove from peers array */
+    for (int i = 0; i < pc->ctx->num_peers; i++) {
+        if (pc->ctx->peers[i] == pc) {
+            /* Shift remaining peers left */
+            for (int j = i; j < pc->ctx->num_peers - 1; j++) {
+                pc->ctx->peers[j] = pc->ctx->peers[j+1];
+            }
+            pc->ctx->peers[pc->ctx->num_peers - 1] = NULL;
+            break;
+        }
+    }
     pc->ctx->num_peers--;
     aosl_lock_unlock(pc->ctx->mutex);
 
@@ -313,7 +338,34 @@ tinyrtc_error_t tinyrtc_peer_connection_create_offer(
     /* Copy to pc->local_sdp */
     pc->local_sdp = offer;
 
-    /* Generate SDP text */
+    /* Start ICE candidate gathering immediately */
+    ice_session_t *ice = ice_session_create(pc);
+    pc->ice = ice;
+    tinyrtc_error_t ice_err = ice_start_gathering(ice, pc->config.stun_server);
+    if (ice_err != TINYRTC_OK) {
+        TINYRTC_LOG_ERROR("Failed to start ICE gathering: %s", tinyrtc_get_error_string(ice_err));
+    }
+
+    /* Copy ICE candidates to SDP now that gathering is synchronous (for now) */
+    for (int i = 0; i < pc->ice->num_local_candidates; i++) {
+        ice_candidate_to_sdp(&pc->ice->local[i], &pc->local_sdp.candidates[pc->local_sdp.num_candidates]);
+        pc->local_sdp.num_candidates++;
+        if (pc->config.observer.on_ice_candidate) {
+            // Convert from sdp_candidate_t to tinyrtc_ice_candidate_t
+            sdp_candidate_t *sdp_cand = &pc->local_sdp.candidates[pc->local_sdp.num_candidates - 1];
+            tinyrtc_ice_candidate_t cand;
+            cand.foundation = sdp_cand->foundation;
+            cand.priority = sdp_cand->priority;
+            cand.ip = sdp_cand->ip;
+            cand.port = sdp_cand->port;
+            cand.type = sdp_cand->type;
+            cand.protocol = sdp_cand->protocol;
+            cand.is_ipv6 = sdp_cand->is_ipv6;
+            pc->config.observer.on_ice_candidate(pc->config.observer.user_data, &cand);
+        }
+    }
+
+    /* Generate SDP text now that candidates are added */
     tinyrtc_error_t err = sdp_generate(&pc->local_sdp, out_sdp);
 
     aosl_lock_unlock(pc->mutex);
@@ -323,9 +375,8 @@ tinyrtc_error_t tinyrtc_peer_connection_create_offer(
         return err;
     }
 
-    TINYRTC_LOG_DEBUG("Created offer, size=%zu bytes", strlen(*out_sdp));
-
-    /* TODO: Start ICE candidate gathering */
+    TINYRTC_LOG_INFO("Created offer with %d ICE candidates, size=%zu bytes",
+        pc->local_sdp.num_candidates, strlen(*out_sdp));
 
     return TINYRTC_OK;
 }
@@ -399,7 +450,20 @@ tinyrtc_error_t tinyrtc_peer_connection_set_remote_description(
         }
     }
 
+    /* Add all parsed remote ICE candidates to ICE session */
+    if (pc->ice != NULL) {
+        for (int i = 0; i < pc->remote_sdp.num_candidates; i++) {
+            sdp_candidate_t *sdp_cand = &pc->remote_sdp.candidates[i];
+            TINYRTC_LOG_DEBUG("Adding remote ICE candidate: %s:%d", sdp_cand->ip, sdp_cand->port);
+            ice_add_remote_candidate(pc->ice, sdp_cand);
+        }
+        TINYRTC_LOG_DEBUG("ICE: starting connectivity checks after remote description");
+    }
+
     aosl_lock_unlock(pc->mutex);
+
+    TINYRTC_LOG_INFO("Remote description set: %d media tracks, %d ICE candidates",
+        pc->remote_sdp.num_media, pc->remote_sdp.num_candidates);
 
     return TINYRTC_OK;
 }
@@ -479,7 +543,34 @@ tinyrtc_error_t tinyrtc_peer_connection_create_answer(
     /* Store answer locally */
     pc->local_sdp = answer;
 
-    /* Generate SDP text */
+    /* Start ICE candidate gathering immediately */
+    ice_session_t *ice = ice_session_create(pc);
+    pc->ice = ice;
+    tinyrtc_error_t ice_err = ice_start_gathering(ice, pc->config.stun_server);
+    if (ice_err != TINYRTC_OK) {
+        TINYRTC_LOG_ERROR("Failed to start ICE gathering: %s", tinyrtc_get_error_string(ice_err));
+    }
+
+    /* Copy ICE candidates to SDP now that gathering is synchronous (for now) */
+    for (int i = 0; i < pc->ice->num_local_candidates; i++) {
+        ice_candidate_to_sdp(&pc->ice->local[i], &pc->local_sdp.candidates[pc->local_sdp.num_candidates]);
+        pc->local_sdp.num_candidates++;
+        if (pc->config.observer.on_ice_candidate) {
+            // Convert from sdp_candidate_t to tinyrtc_ice_candidate_t
+            sdp_candidate_t *sdp_cand = &pc->local_sdp.candidates[pc->local_sdp.num_candidates - 1];
+            tinyrtc_ice_candidate_t cand;
+            cand.foundation = sdp_cand->foundation;
+            cand.priority = sdp_cand->priority;
+            cand.ip = sdp_cand->ip;
+            cand.port = sdp_cand->port;
+            cand.type = sdp_cand->type;
+            cand.protocol = sdp_cand->protocol;
+            cand.is_ipv6 = sdp_cand->is_ipv6;
+            pc->config.observer.on_ice_candidate(pc->config.observer.user_data, &cand);
+        }
+    }
+
+    /* Generate SDP text now that candidates are added */
     tinyrtc_error_t err = sdp_generate(&pc->local_sdp, out_sdp);
 
     aosl_lock_unlock(pc->mutex);
@@ -489,9 +580,8 @@ tinyrtc_error_t tinyrtc_peer_connection_create_answer(
         return err;
     }
 
-    TINYRTC_LOG_DEBUG("Created answer, size=%zu bytes", strlen(*out_sdp));
-
-    /* TODO: Start ICE candidate gathering */
+    TINYRTC_LOG_INFO("Created answer with %d ICE candidates, size=%zu bytes",
+        pc->local_sdp.num_candidates, strlen(*out_sdp));
 
     return TINYRTC_OK;
 }
@@ -507,7 +597,7 @@ tinyrtc_error_t tinyrtc_peer_connection_add_ice_candidate(
 
     int added = sdp_add_candidate(&pc->remote_sdp, candidate);
 
-    aosl_lock_unlock(pc);
+    aosl_lock_unlock(pc->mutex);
 
     if (added < 0) {
         TINYRTC_LOG_WARN("tinyrtc_peer_connection_add_ice_candidate: too many candidates");

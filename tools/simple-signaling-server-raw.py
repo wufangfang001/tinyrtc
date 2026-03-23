@@ -206,13 +206,13 @@ async def handle_client(reader, writer):
                 # Broadcast to other clients in this room
                 if room_id in rooms:
                     count = 0
+                    # Pre-encode once outside loop - more efficient and fixes variable scope
+                    payload_bytes = payload_text.encode()
+                    pl_len = len(payload_bytes)
                     for other_writer, other_client_id in rooms[room_id]:
                         if other_writer != writer:
                             # Just forward the entire message
                             # We need to encapsulate it in a WebSocket text frame
-                            payload_bytes = payload_text.encode()
-                            pl_len = len(payload_bytes)
-                            
                             # Build frame header
                             header = bytearray()
                             header.append(0x81)  # FIN + TEXT
@@ -234,7 +234,7 @@ async def handle_client(reader, writer):
                                 count += 1
                             except Exception as e:
                                 print(f"Failed to send to client: {e}")
-                    print(f"Forwarded message to {count} clients in room {room_id}, full payload size={len(decoded_payload)} bytes, {len(payload_bytes)=}")
+                    print(f"Forwarded message to {count} clients in room {room_id}, full payload size={len(payload_text)} bytes, {len(payload_bytes)=}")
                     
     except Exception as e:
         print(f"Exception: {e}")

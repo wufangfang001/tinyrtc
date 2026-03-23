@@ -148,21 +148,70 @@ static int sig_parse_url(const char *url, char *host, size_t host_len,
     return 0;
 }
 
+/* Standard Base64 encoding - correctly handles any input length */
+static const char *base64_chars =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static size_t base64_encode(const unsigned char *input, size_t input_len, char *output, size_t output_len)
+{
+    size_t output_size = ((input_len + 2) / 3) * 4;
+    // Check output buffer size
+    if (output_len < output_size + 1) {
+        return 0; // buffer too small
+    }
+
+    size_t i = 0;
+    size_t j = 0;
+    unsigned char buf[3];
+    unsigned int n = 0;
+
+    while (i < input_len) {
+        buf[n++] = input[i++];
+        if (n == 3) {
+            // we have 3 bytes, encode 4 6-bit chars
+            output[j++] = base64_chars[(buf[0] >> 2) & 0x3F];
+            output[j++] = base64_chars[((buf[0] & 0x03) << 4) | ((buf[1] >> 4) & 0x0F)];
+            output[j++] = base64_chars[((buf[1] & 0x0F) << 2) | ((buf[2] >> 6) & 0x03)];
+            output[j++] = base64_chars[buf[2] & 0x3F];
+            n = 0;
+        }
+    }
+
+    // handle remaining bytes (if any)
+    if (n > 0) {
+        // zero remaining bytes in buffer
+        for (size_t k = n; k < 3; k++) {
+            buf[k] = 0;
+        }
+
+        output[j++] = base64_chars[(buf[0] >> 2) & 0x3F];
+        output[j++] = base64_chars[((buf[0] & 0x03) << 4) | ((buf[1] >> 4) & 0x0F)];
+        if (n == 1) {
+            output[j++] = '=';
+            output[j++] = '=';
+        } else if (n == 2) {
+            output[j++] = base64_chars[((buf[1] & 0x0F) << 2) | ((buf[2] >> 6) & 0x03)];
+            output[j++] = '=';
+        }
+    }
+
+    output[j] = '\0';
+    return output_size;
+}
+
 /* Generate WebSocket accept key according to RFC6455 */
 static void sig_compute_accept_key(const char *client_key, char *accept, size_t accept_len) {
     /* The GUID from RFC6455 */
     static const char *guid = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 
-    size_t concat_len = strlen(client_key) + strlen(guid);
+    size_t client_key_len = strlen(client_key);
+    size_t concat_len = client_key_len + strlen(guid);
     unsigned char concat[512]; // client-key is at most 24 chars, guid is 36 → total 60 < 512
-    
-    memcpy(concat, client_key, strlen(client_key));
-    memcpy(concat + strlen(client_key), guid, strlen(guid));
+    memcpy(concat, client_key, client_key_len);
+    memcpy(concat + client_key_len, guid, strlen(guid));
 
     /* SHA-1 hash using mbedTLS */
     unsigned char hash[20];
-    /* mbedtls_sha1() one-shot API exists only in mbedTLS 3.x+ */
-    /* On 2.x, we must use the context-based API */
     mbedtls_sha1_context ctx;
     mbedtls_sha1_init(&ctx);
     mbedtls_sha1_starts(&ctx);
@@ -170,30 +219,12 @@ static void sig_compute_accept_key(const char *client_key, char *accept, size_t 
     mbedtls_sha1_finish(&ctx, hash);
     mbedtls_sha1_free(&ctx);
 
-    /* Base64 encode
+    /* Base64 encode - using standard base64 encoding
      * SHA-1 always outputs exactly 20 bytes (160 bits) → 27 base64 chars + 1 padding = 28 total
-     * Use a straightforward approach that guarantees we output all bits
+     * accept buffer is at least 32 bytes, which is enough for 28 chars + null terminator
      */
-    static const char *b64 =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-
-    int j = 0;
-    // 20 bytes = 160 bits, output exactly 27 6-bit groups
-    for (int group = 0; group < 27 && j < (int)accept_len - 1; group++) {
-        int byte_idx = (group * 6) / 8;
-        int bit_offset = (group * 6) % 8;
-        uint8_t b1 = hash[byte_idx];
-        uint8_t b2 = (byte_idx + 1 < 20) ? hash[byte_idx + 1] : 0;
-        uint32_t val = (b1 << 8) | b2;
-        val >>= (16 - 6 - bit_offset);
-        val &= 0x3F;
-        accept[j++] = b64[val];
-    }
-    // Add padding to make total length multiple of 4 (always needs 1 padding for 20 bytes SHA-1)
-    while (j % 4 != 0 && j < (int)accept_len - 1) {
-        accept[j++] = '=';
-    }
-    accept[j] = '\0';
+    base64_encode(hash, 20, accept, accept_len);
+    TINYRTC_LOG_DEBUG("sig_compute_accept_key: result '%s' len=%zu", accept, strlen(accept));
 }
 
 static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
@@ -204,24 +235,11 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
         mbedtls_ctr_drbg_random(&sig->ctr_drbg, &key_bytes[i], 1);
     }
 
-    /* Base64 encode the key */
-    static const char *b64 =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    char client_key[28]; /* 16 bytes -> 24 base64 chars + null */
-    int i = 0;
-    int j = 0;
-    unsigned char chunk[3];
-    while (i < 16) {
-        chunk[0] = key_bytes[i++];
-        chunk[1] = i < 16 ? key_bytes[i++] : 0;
-        chunk[2] = i < 16 ? key_bytes[i++] : 0;
-
-        client_key[j++] = b64[(chunk[0] >> 2) & 0x3F];
-        client_key[j++] = b64[((chunk[0] & 0x03) << 4) | ((chunk[1] >> 4) & 0x0F)];
-        client_key[j++] = b64[((chunk[1] & 0x0F) << 2) | ((chunk[2] >> 6) & 0x03)];
-        client_key[j++] = b64[chunk[2] & 0x3F];
-    }
-    client_key[j] = '\0';
+    /* Base64 encode 16 bytes of random data -> exactly 24 base64 characters */
+    char client_key[64]; // large enough buffer
+    size_t encoded_len = base64_encode(key_bytes, 16, client_key, sizeof(client_key));
+    (void)encoded_len;
+    aosl_log(AOSL_LOG_DEBUG, "Signaling: generated client_key '%s' len=%zu", client_key, strlen(client_key));
 
     /* Build handshake request */
     char request[2048];
@@ -302,7 +320,7 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
     /* Check Sec-WebSocket-Accept */
     char expected_accept[32]; // SHA-1 always produces exactly 28 bytes base64 + 1 null terminator, extra space to avoid overflow
     sig_compute_accept_key(client_key, expected_accept, sizeof(expected_accept));
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: computed accept: '%s' (len=%zu)", expected_accept, strlen(expected_accept));
+    aosl_log(AOSL_LOG_INFO, "Signaling: computed accept: '%s' (len=%zu)", expected_accept, strlen(expected_accept));
 
     char *accept_header = strstr(response, "Sec-WebSocket-Accept:");
     if (!accept_header) {
@@ -316,19 +334,30 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
         accept_header++;
     }
 
+    // The accept key is exactly 28 characters (28-base64 + null terminator = 29)
+    // It ends at \r\n or end-of-headers
     char *accept_end = strchr(accept_header, '\r');
     if (accept_end) {
         *accept_end = '\0';
+    } else {
+        // If no \r found, search for \n instead
+        accept_end = strchr(accept_header, '\n');
+        if (accept_end) {
+            *accept_end = '\0';
+        }
+        // If still not found, leave as-is (buffer is null terminated already)
     }
+
+    aosl_log(AOSL_LOG_INFO, "Signaling: received accept: '%s' (len=%zu)", accept_header, strlen(accept_header));
 
     if (strcmp(accept_header, expected_accept) != 0) {
         snprintf(sig->last_error, sizeof(sig->last_error),
-                 "Invalid Sec-WebSocket-Accept: expected %s, got %s",
-                 expected_accept, accept_header);
+                 "Invalid Sec-WebSocket-Accept: expected %s (len=%zu), got %s (len=%zu)",
+                 expected_accept, strlen(expected_accept), accept_header, strlen(accept_header));
         return -1;
     }
 
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: WebSocket handshake completed");
+    aosl_log(AOSL_LOG_INFO, "Signaling: WebSocket handshake completed successfully");
     return 0;
 }
 

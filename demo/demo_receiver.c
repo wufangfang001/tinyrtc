@@ -162,7 +162,7 @@ int main(int argc, char **argv)
 
     /* Configure peer connection */
     tinyrtc_pc_config_t pc_config = {0};
-    pc_config.stun_server = "stun:stun.l.google.com:19302";
+    pc_config.stun_server = NULL;  // No STUN needed for localhost testing
     pc_config.observer.on_ice_candidate = on_ice_candidate;
     pc_config.observer.on_connection_state_change = on_connection_state_change;
     pc_config.observer.on_track_added = on_track_added;

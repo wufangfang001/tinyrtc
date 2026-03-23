@@ -9,8 +9,14 @@
  */
 
 #include "common.h"
+#include "ice_internal.h"
+#include "peer_connection_internal.h"
 #include "tinyrtc/tinyrtc.h"
 #include "tinyrtc/signaling.h"
+
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 /* =============================================================================
  * TinyRTC context structure - definition now in src/include/common.h
@@ -119,9 +125,9 @@ void tinyrtc_destroy(tinyrtc_context_t *ctx)
 int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
 {
     TINYRTC_CHECK_NULL_RET(0, ctx);
-    (void)timeout_ms;
 
     int events_processed = 0;
+    uint64_t now = aosl_time_ms();
 
     /* Lock the context for thread safety */
     aosl_lock_lock(ctx->mutex);
@@ -134,12 +140,125 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
         }
     }
 
-    /* TODO:
-     * 1. Process network events (socket polling)
-     * 2. Process timers (timeouts, retransmissions)
-     * 3. Dispatch callbacks to application
-     * 4. Process any pending events in each peer connection
-     */
+    /* Prepare fds for select */
+    fd_set read_fds;
+    FD_ZERO(&read_fds);
+    int max_fd = -1;
+
+    /* Add all ICE sockets from all peers to fd_set */
+    for (int i = 0; i < ctx->num_peers; i++) {
+        tinyrtc_peer_connection_t *pc = ctx->peers[i];
+        if (pc && pc->ice && pc->ice->socket >= 0) {
+            FD_SET(pc->ice->socket, &read_fds);
+            if (pc->ice->socket > max_fd) {
+                max_fd = pc->ice->socket;
+            }
+        }
+    }
+
+    aosl_lock_unlock(ctx->mutex);
+
+    /* Do select with timeout */
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+    int ready = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
+    if (ready <= 0) {
+        /* Timeout or error, no packets ready */
+        return events_processed;
+    }
+
+    /* Now process each ready socket */
+    aosl_lock_lock(ctx->mutex);
+
+    uint8_t buffer[2048]; /* 2KB MTU is enough for UDP */
+    for (int i = 0; i < ctx->num_peers; i++) {
+        tinyrtc_peer_connection_t *pc = ctx->peers[i];
+        if (!pc || !pc->ice || pc->ice->socket < 0) {
+            continue;
+        }
+
+        if (FD_ISSET(pc->ice->socket, &read_fds)) {
+            /* Read packet */
+            int len = recv(pc->ice->socket, buffer, sizeof(buffer), 0);
+            if (len > 0) {
+                /* Check if this is a STUN packet or media/DTLS packet */
+                int is_stun = ice_process_packet(pc->ice, buffer, len);
+                if (!is_stun) {
+                    if (pc->dtls != NULL && !pc->srtp_initialized) {
+                        /* This is DTLS handshake data - process it */
+                        int ret = dtls_process_data(pc->dtls, buffer, len);
+                        TINYRTC_LOG_DEBUG("Processed DTLS packet: %d", ret);
+                        events_processed++;
+                    } else {
+                        /* This is RTP media, process it */
+                        pc_process_incoming_rtp(pc, buffer, len);
+                        events_processed++;
+                    }
+                }
+                events_processed++;
+            }
+        }
+
+        /* Run ICE connectivity checks (send pings, handle timeouts) */
+        ice_check_connectivity(pc->ice, now);
+
+        /* Check if ICE connected and notify state change */
+        bool was_connected = pc->state == TINYRTC_PC_STATE_CONNECTED;
+        bool is_connected = ice_is_connected(pc->ice);
+        TINYRTC_LOG_INFO("Peer %p: ICE check done, connected=%d was_connected=%d", pc, is_connected, was_connected);
+        if (!was_connected && is_connected) {
+            pc->state = TINYRTC_PC_STATE_CONNECTED;
+            /* Start DTLS handshake now that ICE is connected */
+            if (pc->dtls == NULL) {
+                dtls_role_t role = pc->config.is_initiator ? DTLS_ROLE_CLIENT : DTLS_ROLE_SERVER;
+                pc->dtls = dtls_init(role);
+                if (pc->dtls != NULL) {
+                    dtls_start(pc->dtls, pc->ice->socket);
+                    TINYRTC_LOG_INFO("DTLS handshake started (role=%s)",
+                        role == DTLS_ROLE_CLIENT ? "client" : "server");
+                } else {
+                    TINYRTC_LOG_ERROR("Failed to initialize DTLS");
+                }
+            }
+            if (pc->config.observer.on_connection_state_change) {
+                pc->config.observer.on_connection_state_change(
+                    pc->config.observer.user_data,
+                    pc->state);
+            }
+            TINYRTC_LOG_INFO("ICE connected successfully, starting DTLS handshake (initiator=%d)", pc->config.is_initiator);
+        }
+
+        /* Process DTLS if DTLS is started */
+        if (pc->dtls != NULL && !pc->srtp_initialized) {
+            int dtls_done = dtls_is_handshake_complete(pc->dtls);
+            TINYRTC_LOG_DEBUG("Peer %p: DTLS handshake check done, complete=%d", pc, dtls_done);
+            if (dtls_done) {
+                /* DTLS done, extract keys and initialize SRTP */
+                unsigned char master_secret[48];
+                unsigned char client_key[16];
+                unsigned char server_key[16];
+                unsigned char client_salt[14];
+                unsigned char server_salt[14];
+                TINYRTC_LOG_DEBUG("Deriving SRTP keys");
+                dtls_derive_srtp_keys(pc->dtls, client_key, client_salt, server_key, server_salt);
+                if (dtls_get_master_secret(pc->dtls, master_secret, 48)) {
+                    /* SRTP key derivation: combine master secret with salt according to RFC 5764 */
+                    pc->srtp = srtp_init(master_secret, 48);
+                    if (pc->srtp != NULL) {
+                        pc->srtp_initialized = true;
+                        TINYRTC_LOG_INFO("DTLS handshake complete, SRTP initialized successfully");
+                        TINYRTC_LOG_INFO("TinyRTC: PeerConnection FULLY CONNECTED! Ready for media transport");
+                    } else {
+                        TINYRTC_LOG_ERROR("Failed to initialize SRTP after DTLS");
+                    }
+                } else {
+                    TINYRTC_LOG_ERROR("Failed to get master secret from DTLS");
+                }
+            }
+        }
+    }
 
     aosl_lock_unlock(ctx->mutex);
 

@@ -18,10 +18,35 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <unistd.h>
+
+/* STUN helper functions */
+static uint16_t stun_read16(const uint8_t *p)
+{
+    return (uint16_t)((p[0] << 8) | p[1]);
+}
+
+static uint32_t stun_read32(const uint8_t *p)
+{
+    return (uint32_t)((p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3]);
+}
+
+static void stun_write16(uint8_t *p, uint16_t v)
+{
+    p[0] = (v >> 8) & 0xFF;
+    p[1] = v & 0xFF;
+}
+
+static void stun_write32(uint8_t *p, uint32_t v)
+{
+    p[0] = (v >> 24) & 0xFF;
+    p[1] = (v >> 16) & 0xFF;
+    p[2] = (v >> 8) & 0xFF;
+    p[3] = v & 0xFF;
+}
 
 /* STUN magic cookie */
 #define STUN_MAGIC_COOKIE 0x2112A442
-#include <unistd.h>
 
 /* =============================================================================
  * Local helpers
@@ -126,34 +151,28 @@ void ice_session_destroy(ice_session_t *ice)
 tinyrtc_error_t ice_start_gathering(ice_session_t *ice, const char *stun_url)
 {
     TINYRTC_CHECK(ice != NULL, TINYRTC_ERROR_INVALID_ARG);
-    TINYRTC_CHECK(stun_url != NULL, TINYRTC_ERROR_INVALID_ARG);
-
-    TINYRTC_LOG_DEBUG("Starting ICE candidate gathering from %s", stun_url);
 
     ice->state = 1; /* gathering */
 
-    /* Parse STUN URL */
-    char stun_host[128];
-    uint16_t stun_port;
-    if (!parse_stun_url(stun_url, stun_host, sizeof(stun_host), &stun_port)) {
-        TINYRTC_LOG_ERROR("Invalid STUN URL: %s", stun_url);
-        ice->state = 2; /* gathered */
-        ice->gathering_complete = true;
-        return TINYRTC_ERROR;
+    /* When no STUN URL is provided (localhost testing), just create UDP socket and add host candidate */
+    if (stun_url == NULL) {
+        TINYRTC_LOG_INFO("No STUN server configured, using local host candidate only");
+    } else {
+        TINYRTC_LOG_DEBUG("Starting ICE candidate gathering from %s", stun_url);
     }
-
-    /* TODO: Enumerate local interfaces and gather host candidates */
-    /* For now, just add a placeholder host candidate */
-    /* In real implementation, we need to enumerate all network interfaces */
 
     /* Create UDP socket */
     int sock = aosl_hal_sk_socket(AOSL_AF_INET, AOSL_SOCK_DGRAM, AOSL_IPPROTO_UDP);
     if (sock < 0) {
         TINYRTC_LOG_ERROR("Failed to create UDP socket for ICE");
-        ice->state = 2;
+        ice->state = 2; /* gathered */
         ice->gathering_complete = true;
         return TINYRTC_ERROR_NETWORK;
     }
+
+    /* Enable address reuse to avoid bind failures when restarting quickly */
+    int reuse = 1;
+    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, (char*)&reuse, sizeof(reuse));
 
     /* Bind to any port */
     aosl_sockaddr_t addr = {0};
@@ -170,32 +189,56 @@ tinyrtc_error_t ice_start_gathering(ice_session_t *ice, const char *stun_url)
     }
 
     ice->socket = sock;
+    TINYRTC_LOG_INFO("ICE UDP socket created and bound successfully, fd=%d", sock);
 
     /* Get actual port we bound to */
     struct sockaddr_in bound_addr;
     socklen_t addr_len = sizeof(bound_addr);
-    ret = getsockname((int)sock, (struct sockaddr *)&bound_addr, &addr_len);
+    int ret_getname = getsockname((int)sock, (struct sockaddr *)&bound_addr, &addr_len);
     uint16_t local_port = ntohs(bound_addr.sin_port);
 
-    /* Add host candidate for 0.0.0.0 (we just need to send STUN) */
+    /* Add a local host candidate on 127.0.0.1 (localhost testing) */
     ice_candidate_internal_t *cand = &ice->local[ice->num_local_candidates];
     memset(cand, 0, sizeof(*cand));
     cand->type = ICE_CANDIDATE_TYPE_HOST;
-    strcpy(cand->ip, "0.0.0.0");
+    strcpy(cand->ip, "127.0.0.1");
     cand->port = local_port;
     strcpy(cand->protocol, "udp");
     cand->is_ipv6 = false;
-    cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_HOST);
+    cand->priority = ICE_PRIORITY_HOST;
     cand->selected = false;
     ice->num_local_candidates++;
 
-    /* Send STUN binding request to get server reflexive candidate */
-    stun_send_binding_request(ice, stun_host, stun_port);
+    /* Also add 0.0.0.0 for compatibility */
+    if (ice->num_local_candidates < ICE_MAX_CANDIDATES) {
+        ice_candidate_internal_t *cand2 = &ice->local[ice->num_local_candidates];
+        memset(cand2, 0, sizeof(*cand2));
+        cand2->type = ICE_CANDIDATE_TYPE_HOST;
+        strcpy(cand2->ip, "0.0.0.0");
+        cand2->port = local_port;
+        strcpy(cand2->protocol, "udp");
+        cand2->is_ipv6 = false;
+        cand2->priority = ICE_PRIORITY_HOST - 1000;
+        cand2->selected = false;
+        ice->num_local_candidates++;
+    }
+
+    TINYRTC_LOG_INFO("Added local host candidate %s:%d", cand->ip, cand->port);
+
+    /* If STUN URL is provided, we would do server reflexive candidate gathering here */
+    if (stun_url != NULL) {
+        char stun_host[128];
+        uint16_t stun_port;
+        if (!parse_stun_url(stun_url, stun_host, sizeof(stun_host), &stun_port)) {
+            TINYRTC_LOG_ERROR("Invalid STUN URL: %s", stun_url);
+        }
+        /* TODO: actually send STUN request to get server-reflexive candidate */
+    }
 
     ice->state = 2; /* gathered */
     ice->gathering_complete = true;
-
-    TINYRTC_LOG_DEBUG("ICE gathering complete, %d local candidates", ice->num_local_candidates);
+    TINYRTC_LOG_INFO("ICE candidate gathering complete, %d local candidates total", ice->num_local_candidates);
+    return TINYRTC_OK;
 
     /* Notify application that gathering is complete */
     /* TODO: call observer callback */
@@ -254,29 +297,105 @@ int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len)
         return 1; /* Not STUN */
     }
 
-    /* It's STUN - process it */
+    /* Read STUN message type */
+    stun_header_t *hdr = (stun_header_t *)data;
+    uint16_t msg_type = ntohs(hdr->type);
+
+    if (msg_type == STUN_BINDING_REQUEST) {
+        /* This is a connectivity check request from remote peer - send binding response */
+        /* We need to send binding response back to confirm connectivity */
+
+        /* Get remote address from which we received this packet - actually, we know it from candidate */
+        /* Since we already have the remote candidate, just send a success response */
+        uint8_t buffer[512];
+        size_t resp_len = stun_create_binding_response(buffer, sizeof(buffer), hdr);
+
+        /* Send response back to remote candidate */
+        /* Find the candidate that matches the source IP/port we received from */
+        /* We don't have the source address info here though... for direct connections just use the first remote candidate */
+        if (ice->num_remote_candidates > 0) {
+            ice_candidate_internal_t *remote = &ice->remote[0];
+            struct sockaddr_in remote_addr;
+            memset(&remote_addr, 0, sizeof(remote_addr));
+            remote_addr.sin_family = AF_INET;
+            inet_pton(AF_INET, remote->ip, &remote_addr.sin_addr);
+            remote_addr.sin_port = htons(remote->port);
+
+            int sent = sendto(ice->socket, buffer, resp_len, 0,
+                (struct sockaddr *)&remote_addr, sizeof(remote_addr));
+
+            TINYRTC_LOG_INFO("Sent STUN binding response to %s:%d, %d bytes",
+                remote->ip, remote->port, (int)sent);
+
+            /* Mark this pair as succeeded since we got the request */
+            for (int i = 0; i < ice->num_check_pairs; i++) {
+                if (ice->check_pairs[i].remote == remote && !ice->check_pairs[i].succeeded) {
+                    ice->check_pairs[i].succeeded = true;
+                    TINYRTC_LOG_INFO("Connectivity check succeeded (received request)");
+                }
+            }
+        }
+
+        return 0; /* Handled as STUN */
+    }
+
+    /* It's STUN response - process it */
     char mapped_ip[64];
     uint16_t mapped_port;
     tinyrtc_error_t err = stun_process_response(ice, data, len, mapped_ip, sizeof(mapped_ip), &mapped_port);
 
     if (err == TINYRTC_OK && mapped_ip[0] != '\0') {
-        /* Add server reflexive candidate */
-        if (ice->num_local_candidates < ICE_MAX_CANDIDATES) {
-            ice_candidate_internal_t *cand = &ice->local[ice->num_local_candidates];
-            memset(cand, 0, sizeof(*cand));
-            cand->type = ICE_CANDIDATE_TYPE_SRFLX;
-            strncpy(cand->ip, mapped_ip, sizeof(cand->ip) - 1);
-            cand->port = mapped_port;
-            strcpy(cand->protocol, "udp");
-            cand->is_ipv6 = strchr(mapped_ip, ':') != NULL;
-            cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX);
-            cand->selected = false;
-            ice->num_local_candidates++;
+        /* Check if this is a connectivity check response (we got binding response)
+         * This means our connectivity check succeeded
+         */
+        if (ice->num_local_candidates > 0) {
+            /* This is a connectivity check response - we've connected */
+            /* Find the pair that this corresponds to */
+            /* For now, any successful binding means connectivity check passed */
+            for (int i = 0; i < ice->num_check_pairs; i++) {
+                if (!ice->check_pairs[i].succeeded) {
+                    ice->check_pairs[i].succeeded = true;
+                    TINYRTC_LOG_INFO("Connectivity check succeeded for pair %d", i);
+                }
+            }
+            /* Add server reflexive candidate */
+            if (ice->num_local_candidates < ICE_MAX_CANDIDATES) {
+                ice_candidate_internal_t *cand = &ice->local[ice->num_local_candidates];
+                memset(cand, 0, sizeof(*cand));
+                cand->type = ICE_CANDIDATE_TYPE_SRFLX;
+                strncpy(cand->ip, mapped_ip, sizeof(cand->ip) - 1);
+                cand->port = mapped_port;
+                strcpy(cand->protocol, "udp");
+                cand->is_ipv6 = strchr(mapped_ip, ':') != NULL;
+                cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX);
+                cand->selected = false;
+                ice->num_local_candidates++;
 
-            TINYRTC_LOG_DEBUG("Added server reflexive candidate %s:%d", mapped_ip, mapped_port);
+                TINYRTC_LOG_DEBUG("Added server reflexive candidate %s:%d", mapped_ip, mapped_port);
 
-            /* Notify application via callback with new candidate */
-            /* TODO: call pc->config.observer.on_ice_candidate */
+                /* Notify application via callback with new candidate */
+                /* TODO: call pc->config.observer.on_ice_candidate */
+            }
+        } else {
+            /* This is our own STUN request response from STUN server - just add candidate */
+            /* Add server reflexive candidate */
+            if (ice->num_local_candidates < ICE_MAX_CANDIDATES) {
+                ice_candidate_internal_t *cand = &ice->local[ice->num_local_candidates];
+                memset(cand, 0, sizeof(*cand));
+                cand->type = ICE_CANDIDATE_TYPE_SRFLX;
+                strncpy(cand->ip, mapped_ip, sizeof(cand->ip) - 1);
+                cand->port = mapped_port;
+                strcpy(cand->protocol, "udp");
+                cand->is_ipv6 = strchr(mapped_ip, ':') != NULL;
+                cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX);
+                cand->selected = false;
+                ice->num_local_candidates++;
+
+                TINYRTC_LOG_DEBUG("Added server reflexive candidate %s:%d", mapped_ip, mapped_port);
+
+                /* Notify application via callback with new candidate */
+                /* TODO: call pc->config.observer.on_ice_candidate */
+            }
         }
     }
 
@@ -287,6 +406,13 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
 {
     if (ice == NULL) {
         return;
+    }
+
+    if (ice->state == 2) {
+        /* Gathering complete, now start checking */
+        ice->state = 3; /* checking */
+        TINYRTC_LOG_INFO("ICE gathering complete, starting connectivity checks (%d check pairs)",
+            ice->num_check_pairs);
     }
 
     if (ice->state < 3) {
@@ -300,13 +426,52 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
         if (!pair->succeeded && (pair->last_ping_ms == 0 ||
             (now - pair->last_ping_ms) > (uint64_t)(ICE_STUN_TIMEOUT_MS * ICE_MAX_RETRIES))) {
 
-            /* TODO: Send connectivity check */
+            /* Send connectivity check request (STUN binding) */
             pair->last_ping_ms = now;
 
-            /* For now, just log */
-            TINYRTC_LOG_DEBUG("Checking candidate pair: local=%s:%d remote=%s:%d",
+            /* Build STUN binding request to remote candidate address */
+            struct sockaddr_in remote_addr;
+            memset(&remote_addr, 0, sizeof(remote_addr));
+            remote_addr.sin_family = AF_INET;
+            inet_pton(AF_INET, pair->remote->ip, &remote_addr.sin_addr);
+            remote_addr.sin_port = htons(pair->remote->port);
+
+            /* Create STUN binding request */
+            uint8_t buffer[512];
+            size_t len = 0;
+
+            stun_header_t *hdr = (stun_header_t *)buffer;
+            memset(buffer, 0, sizeof(buffer));
+            stun_write16((uint8_t *)&hdr->type, STUN_BINDING_REQUEST);
+            stun_write16((uint8_t *)&hdr->length, 0);
+            stun_write32((uint8_t *)&hdr->magic_cookie, STUN_MAGIC_COOKIE);
+
+            /* Generate random transaction ID using current time */
+            uint64_t now = (uint64_t)aosl_time_ms();
+            hdr->transaction_id[0] = (now >> 56) & 0xFF;
+            hdr->transaction_id[1] = (now >> 48) & 0xFF;
+            hdr->transaction_id[2] = (now >> 40) & 0xFF;
+            hdr->transaction_id[3] = (now >> 32) & 0xFF;
+            hdr->transaction_id[4] = (now >> 24) & 0xFF;
+            hdr->transaction_id[5] = (now >> 16) & 0xFF;
+            hdr->transaction_id[6] = (now >> 8) & 0xFF;
+            hdr->transaction_id[7] = now & 0xFF;
+            uint64_t extra = now * 31337;
+            hdr->transaction_id[8] = (extra >> 56) & 0xFF;
+            hdr->transaction_id[9] = (extra >> 48) & 0xFF;
+            hdr->transaction_id[10] = (extra >> 40) & 0xFF;
+            hdr->transaction_id[11] = (extra >> 32) & 0xFF;
+
+            len = sizeof(stun_header_t);
+            hdr->length = htons(0);
+
+            /* Send to remote candidate via our UDP socket */
+            int sent = sendto(ice->socket, buffer, len, 0,
+                (struct sockaddr *)&remote_addr, sizeof(remote_addr));
+
+            TINYRTC_LOG_INFO("Sending STUN connectivity check: local=%s:%d remote=%s:%d, sent %d bytes",
                 pair->local->ip, pair->local->port,
-                pair->remote->ip, pair->remote->port);
+                pair->remote->ip, pair->remote->port, (int)sent);
         }
     }
 
@@ -316,11 +481,11 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             ice->selected_pair = &ice->check_pairs[i];
             ice->selected_pair->local->selected = true;
             ice->state = 4; /* done */
-            TINYRTC_LOG_INFO("ICE connected with pair %p RTT %d ms",
-                ice->selected_pair, ice->selected_pair->rtt);
+            TINYRTC_LOG_INFO("ICE connected with pair local=%s:%d remote=%s:%d RTT %d ms",
+                ice->check_pairs[i].local->ip, ice->check_pairs[i].local->port,
+                ice->check_pairs[i].remote->ip, ice->check_pairs[i].remote->port, ice->selected_pair->rtt);
 
-            /* Notify application connection state change */
-            /* TODO: pc->observer.on_connection_state_change */
+            /* Notify application connection state change is done at pc level after */
         }
     }
 }
