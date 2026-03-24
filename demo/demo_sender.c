@@ -252,6 +252,11 @@ int main(int argc, char **argv)
             goto cleanup;
         }
 
+        /* Debug: print the actual SDP */
+        aosl_log(AOSL_LOG_INFO, "\n--- Generated SDP Offer (%zu bytes) ---\n", strlen(offer_sdp));
+        aosl_log(AOSL_LOG_INFO, "%s", offer_sdp);
+        aosl_log(AOSL_LOG_INFO, "--- End of SDP Offer ---\n\n");
+
         aosl_log(AOSL_LOG_INFO, "Created offer, sending to signaling server...\n");
         err = tinyrtc_signaling_send_offer(sig, NULL, offer_sdp);
         if (err != TINYRTC_OK) {

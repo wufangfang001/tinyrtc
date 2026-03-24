@@ -126,7 +126,7 @@ tinyrtc_error_t sdp_generate(const sdp_session_t *session, char **out_text)
     for (int i = 0; i < session->num_candidates; i++) {
         const sdp_candidate_t *cand = &session->candidates[i];
         SDP_APPEND_LINE(buf, buf_size, offset,
-            "a=candidate:%s 1 %u %s %d %s network %s",
+            "a=candidate:%s 1 %u %s %d %s %s",
             cand->foundation, cand->priority, cand->ip, cand->port,
             cand->type, cand->protocol);
     }

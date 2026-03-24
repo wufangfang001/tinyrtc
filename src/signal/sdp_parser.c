@@ -196,26 +196,31 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
     sdp_session_init(session);
 
     const char *p = text;
+    int line_num = 0;
     while (*p != '\0') {
         if (*p == '\n' || *p == '\r') {
             p++;
             continue;
         }
 
+        line_num++;
         char type = *p;
         p++;
         if (*p != '=') {
             /* Invalid line, skip */
-            TINYRTC_LOG_WARN("Invalid SDP line (no = after type char)");
+            TINYRTC_LOG_WARN("Invalid SDP line (no = after type char) at line %d", line_num);
             p = find_eol(p);
             p++;
             continue;
         }
         p++;
 
+        TINYRTC_LOG_INFO("SDP parsing line %d type '%c'", line_num, type);
+
         switch (type) {
             case 'v': /* Version */
                 parse_int(p, &session->version);
+                /* parse_int doesn't advance p past the number, we need to skip to end of line */
                 p = find_eol(p);
                 break;
 
@@ -233,13 +238,11 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                 copy_until(session->network_type, sizeof(session->network_type), &p, ' ');
                 copy_until(session->address_type, sizeof(session->address_type), &p, ' ');
                 copy_until(session->unicast_address, sizeof(session->unicast_address), &p, '\n');
-                p = find_eol(p);
                 break;
             }
 
             case 's': /* Session name */
                 copy_until(session->session_name, sizeof(session->session_name), &p, '\n');
-                p = find_eol(p);
                 break;
 
             case 't': /* Timing */
@@ -249,7 +252,6 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                 parse_uint64(buf, &session->start_time);
                 copy_until(buf, sizeof(buf), &p, '\n');
                 parse_uint64(buf, &session->stop_time);
-                p = find_eol(p);
                 break;
             }
 
@@ -324,7 +326,7 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                 break;
         }
 
-        /* Go to next line */
+        /* Go to next line - all lines get the same treatment */
         p = find_eol(p);
         if (*p != '\0') {
             p++;

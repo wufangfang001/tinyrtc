@@ -829,13 +829,34 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
                     size_t sdp_len = (size_t)(end - found);
                     char *sdp = (char *)aosl_malloc(sdp_len + 1);
                     if (sdp) {
-                        memcpy(sdp, found, sdp_len);
-                        sdp[sdp_len] = '\0';
+                        /* Unescape JSON escaped newlines: \\r\\n -> \r\n */
+                        size_t i = 0, j = 0;
+                        while (i < sdp_len && found[i] != '\0') {
+                            if (found[i] == '\\' && i + 1 < sdp_len) {
+                                /* Handle escaped characters */
+                                if (found[i+1] == 'r') {
+                                    sdp[j++] = '\r';
+                                    i += 2;
+                                } else if (found[i+1] == 'n') {
+                                    sdp[j++] = '\n';
+                                    i += 2;
+                                } else if (found[i+1] == '\\') {
+                                    sdp[j++] = '\\';
+                                    i += 2;
+                                } else {
+                                    sdp[j++] = found[i++];
+                                }
+                            } else {
+                                sdp[j++] = found[i++];
+                            }
+                        }
+                        sdp[j] = '\0';
                         if (event_type == TINYRTC_SIGNAL_EVENT_OFFER) {
                             event.data.offer = sdp;
                         } else {
                             event.data.answer = sdp;
                         }
+                        TINYRTC_LOG_DEBUG("Extracted SDP: %zu bytes, after unescaping %zu bytes", sdp_len, j);
                     }
                 }
             }
