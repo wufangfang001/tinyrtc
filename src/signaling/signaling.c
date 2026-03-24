@@ -19,6 +19,8 @@ struct tinyrtc_context;
 #include <stdbool.h>
 #include <stdint.h>
 #include <stddef.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "mbedtls/net.h"
 #include "mbedtls/ssl.h"
@@ -371,21 +373,22 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
     bool is_wss = sig_ssl_configured(sig);
 
     for (int i = 0; i < 2; i++) {
-        do {
-            if (is_wss) {
-                ret = mbedtls_ssl_read(&sig->ssl, &hdr[i], 1);
-            } else {
-                ret = mbedtls_net_recv(&sig->net, &hdr[i], 1);
-            }
-            if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                aosl_msleep(1);
-            }
-        } while (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-                 ret == MBEDTLS_ERR_SSL_WANT_WRITE);
-
-        if (ret <= 0) {
+        if (is_wss) {
+            ret = mbedtls_ssl_read(&sig->ssl, &hdr[i], 1);
+        } else {
+            ret = mbedtls_net_recv(&sig->net, &hdr[i], 1);
+        }
+        if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            /* No data available right now, return immediately to allow main loop
+             * continue processing ICE connectivity checks, send STUN pings, etc.
+             * Sleeping here would just cause unnecessary delay and blocking. */
             /* No data available, not an error for polling */
             return 0;
+        }
+
+        if (ret <= 0) {
+            /* Error/EOF */
+            return -1;
         }
     }
 
@@ -410,17 +413,15 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
     if (bytes_needed > 0) {
         uint8_t ext_len[8];
         for (int i = 0; i < bytes_needed; i++) {
-            do {
-                if (is_wss) {
-                    ret = mbedtls_ssl_read(&sig->ssl, &ext_len[i], 1);
-                } else {
-                    ret = mbedtls_net_recv(&sig->net, &ext_len[i], 1);
-                }
-                if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                    aosl_msleep(1);
-                }
-            } while (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-                     ret == MBEDTLS_ERR_SSL_WANT_WRITE);
+            if (is_wss) {
+                ret = mbedtls_ssl_read(&sig->ssl, &ext_len[i], 1);
+            } else {
+                ret = mbedtls_net_recv(&sig->net, &ext_len[i], 1);
+            }
+            if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                /* No data available right now, return immediately */
+                return 0;
+            }
 
             if (ret <= 0) {
                 snprintf(sig->last_error, sizeof(sig->last_error),
@@ -443,17 +444,15 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
     uint8_t mask_key[4];
     if (masked) {
         for (int i = 0; i < 4; i++) {
-            do {
-                if (is_wss) {
-                    ret = mbedtls_ssl_read(&sig->ssl, &mask_key[i], 1);
-                } else {
-                    ret = mbedtls_net_recv(&sig->net, &mask_key[i], 1);
-                }
-                if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                    aosl_msleep(1);
-                }
-            } while (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-                     ret == MBEDTLS_ERR_SSL_WANT_WRITE);
+            if (is_wss) {
+                ret = mbedtls_ssl_read(&sig->ssl, &mask_key[i], 1);
+            } else {
+                ret = mbedtls_net_recv(&sig->net, &mask_key[i], 1);
+            }
+            if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+                /* No data available right now, return immediately */
+                return 0;
+            }
 
             if (ret <= 0) {
                 snprintf(sig->last_error, sizeof(sig->last_error),
@@ -473,17 +472,15 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
 
     /* Read payload */
     for (size_t i = 0; i < len; i++) {
-        do {
-            if (is_wss) {
-                ret = mbedtls_ssl_read(&sig->ssl, &sig->recv_buf[sig->recv_len + i], 1);
-            } else {
-                ret = mbedtls_net_recv(&sig->net, &sig->recv_buf[sig->recv_len + i], 1);
-            }
-            if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
-                aosl_msleep(1);
-            }
-        } while (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-                 ret == MBEDTLS_ERR_SSL_WANT_WRITE);
+        if (is_wss) {
+            ret = mbedtls_ssl_read(&sig->ssl, &sig->recv_buf[sig->recv_len + i], 1);
+        } else {
+            ret = mbedtls_net_recv(&sig->net, &sig->recv_buf[sig->recv_len + i], 1);
+        }
+        if (ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+            /* No data available right now, return immediately */
+            return 0;
+        }
 
         if (ret <= 0) {
             snprintf(sig->last_error, sizeof(sig->last_error),
@@ -996,6 +993,13 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
         sig->state = TINYRTC_SIGNALING_ERROR;
         goto error;
     }
+
+    /* Set socket to non-blocking mode so that mbedtls_net_recv returns immediately when no data
+     * is available, allowing the main loop to continue processing ICE connectivity checks,
+     * send STUN pings, process DTLS, etc. Without this, the main loop will block forever
+     * waiting for new WebSocket messages and ICE connectivity will never progress. */
+    int flags = fcntl(sig->net.fd, F_GETFL, 0);
+    fcntl(sig->net.fd, F_SETFL, flags | O_NONBLOCK);
 
     aosl_log(AOSL_LOG_INFO, "Signaling: TCP connected to %s:%s", host, port_str);
 

@@ -457,7 +457,7 @@ tinyrtc_error_t tinyrtc_peer_connection_set_remote_description(
             TINYRTC_LOG_DEBUG("Adding remote ICE candidate: %s:%d", sdp_cand->ip, sdp_cand->port);
             ice_add_remote_candidate(pc->ice, sdp_cand);
         }
-        TINYRTC_LOG_DEBUG("ICE: starting connectivity checks after remote description");
+        TINYRTC_LOG_INFO("ICE: starting connectivity checks after remote description, num check pairs=%d", pc->ice->num_check_pairs);
     }
 
     aosl_lock_unlock(pc->mutex);

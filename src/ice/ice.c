@@ -13,6 +13,7 @@
 #include "ice_internal.h"
 #include "tinyrtc/peer_connection.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <sys/socket.h>
@@ -237,7 +238,7 @@ tinyrtc_error_t ice_start_gathering(ice_session_t *ice, const char *stun_url)
 
     ice->state = 2; /* gathered */
     ice->gathering_complete = true;
-    TINYRTC_LOG_INFO("ICE candidate gathering complete, %d local candidates total", ice->num_local_candidates);
+    TINYRTC_LOG_INFO("==========>> ICE candidate gathering complete, %d local candidates total, state=%d", ice->num_local_candidates, ice->state);
     return TINYRTC_OK;
 
     /* Notify application that gathering is complete */
@@ -329,9 +330,12 @@ int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len)
 
             /* Mark this pair as succeeded since we got the request */
             for (int i = 0; i < ice->num_check_pairs; i++) {
-                if (ice->check_pairs[i].remote == remote && !ice->check_pairs[i].succeeded) {
+                if (ice->check_pairs[i].remote->port == remote->port &&
+                    strcmp(ice->check_pairs[i].remote->ip, remote->ip) == 0 &&
+                    !ice->check_pairs[i].succeeded) {
                     ice->check_pairs[i].succeeded = true;
-                    TINYRTC_LOG_INFO("Connectivity check succeeded (received request)");
+                    TINYRTC_LOG_INFO("Connectivity check succeeded (received request) from %s:%d",
+                        remote->ip, remote->port);
                 }
             }
         }
@@ -408,28 +412,38 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
         return;
     }
 
-    if (ice->state == 2) {
-        /* Gathering complete, now start checking */
-        ice->state = 3; /* checking */
-        TINYRTC_LOG_INFO("ICE gathering complete, starting connectivity checks (%d check pairs)",
-            ice->num_check_pairs);
-    }
-
     if (ice->state < 3) {
-        /* Not started checking yet */
-        return;
+        /* Not started checking yet - check if we can start now */
+        if (ice->state == 2) {
+            /* Gathering complete, now start checking */
+            ice->state = 3; /* checking */
+            TINYRTC_LOG_INFO("ICE gathering complete, starting connectivity checks (%d check pairs)",
+                ice->num_check_pairs);
+        } else {
+            /* Still gathering, not ready to check */
+            return;
+        }
     }
 
     /* Send connectivity check pings to all unchecked pairs */
+    TINYRTC_LOG_DEBUG("ice_check_connectivity: num_check_pairs=%d state=%d", ice->num_check_pairs, ice->state);
+    TINYRTC_LOG_INFO("ice_check_connectivity: starting iteration over %d check pairs, state=%d",
+        ice->num_check_pairs, ice->state);
+    int sent_this_tick = 0;
     for (int i = 0; i < ice->num_check_pairs; i++) {
         ice_check_pair_t *pair = &ice->check_pairs[i];
+        TINYRTC_LOG_DEBUG("Check pair %d: succeeded=%d last_ping_ms=%lu now=%lu timeout=%lu",
+            i, pair->succeeded, (unsigned long)pair->last_ping_ms, (unsigned long)now,
+            (unsigned long)(ICE_STUN_TIMEOUT_MS * ICE_MAX_RETRIES));
+        TINYRTC_LOG_INFO("Check pair %d: succeeded=%d last_ping_ms=%lu -> condition=%d",
+            i, pair->succeeded, (unsigned long)pair->last_ping_ms,
+            (int)(!pair->succeeded && (pair->last_ping_ms == 0 || (now - pair->last_ping_ms) > (uint64_t)(ICE_STUN_TIMEOUT_MS * ICE_MAX_RETRIES))));
         if (!pair->succeeded && (pair->last_ping_ms == 0 ||
             (now - pair->last_ping_ms) > (uint64_t)(ICE_STUN_TIMEOUT_MS * ICE_MAX_RETRIES))) {
 
-            /* Send connectivity check request (STUN binding) */
             pair->last_ping_ms = now;
 
-            /* Build STUN binding request to remote candidate address */
+            /* Send connectivity check request (STUN binding) */
             struct sockaddr_in remote_addr;
             memset(&remote_addr, 0, sizeof(remote_addr));
             remote_addr.sin_family = AF_INET;
@@ -447,16 +461,16 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             stun_write32((uint8_t *)&hdr->magic_cookie, STUN_MAGIC_COOKIE);
 
             /* Generate random transaction ID using current time */
-            uint64_t now = (uint64_t)aosl_time_ms();
-            hdr->transaction_id[0] = (now >> 56) & 0xFF;
-            hdr->transaction_id[1] = (now >> 48) & 0xFF;
-            hdr->transaction_id[2] = (now >> 40) & 0xFF;
-            hdr->transaction_id[3] = (now >> 32) & 0xFF;
-            hdr->transaction_id[4] = (now >> 24) & 0xFF;
-            hdr->transaction_id[5] = (now >> 16) & 0xFF;
-            hdr->transaction_id[6] = (now >> 8) & 0xFF;
-            hdr->transaction_id[7] = now & 0xFF;
-            uint64_t extra = now * 31337;
+            uint64_t now_stun = (uint64_t)aosl_time_ms();
+            hdr->transaction_id[0] = (now_stun >> 56) & 0xFF;
+            hdr->transaction_id[1] = (now_stun >> 48) & 0xFF;
+            hdr->transaction_id[2] = (now_stun >> 40) & 0xFF;
+            hdr->transaction_id[3] = (now_stun >> 32) & 0xFF;
+            hdr->transaction_id[4] = (now_stun >> 24) & 0xFF;
+            hdr->transaction_id[5] = (now_stun >> 16) & 0xFF;
+            hdr->transaction_id[6] = (now_stun >> 8) & 0xFF;
+            hdr->transaction_id[7] = now_stun & 0xFF;
+            uint64_t extra = now_stun * 31337;
             hdr->transaction_id[8] = (extra >> 56) & 0xFF;
             hdr->transaction_id[9] = (extra >> 48) & 0xFF;
             hdr->transaction_id[10] = (extra >> 40) & 0xFF;
@@ -472,6 +486,7 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             TINYRTC_LOG_INFO("Sending STUN connectivity check: local=%s:%d remote=%s:%d, sent %d bytes",
                 pair->local->ip, pair->local->port,
                 pair->remote->ip, pair->remote->port, (int)sent);
+            fflush(stdout);
         }
     }
 
@@ -484,7 +499,7 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             TINYRTC_LOG_INFO("ICE connected with pair local=%s:%d remote=%s:%d RTT %d ms",
                 ice->check_pairs[i].local->ip, ice->check_pairs[i].local->port,
                 ice->check_pairs[i].remote->ip, ice->check_pairs[i].remote->port, ice->selected_pair->rtt);
-
+            fflush(stdout);
             /* Notify application connection state change is done at pc level after */
         }
     }

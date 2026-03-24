@@ -228,6 +228,7 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
                     pc->state);
             }
             TINYRTC_LOG_INFO("ICE connected successfully, starting DTLS handshake (initiator=%d)", pc->config.is_initiator);
+            fflush(stdout);
         }
 
         /* Process DTLS if DTLS is started */
@@ -254,8 +255,10 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
                     pc->srtp_initialized = true;
                     TINYRTC_LOG_INFO("DTLS handshake complete, SRTP initialized successfully");
                     TINYRTC_LOG_INFO("TinyRTC: PeerConnection FULLY CONNECTED! Ready for media transport");
+                    fflush(stdout);
                 } else {
                     TINYRTC_LOG_ERROR("Failed to initialize SRTP after DTLS");
+                    fflush(stdout);
                 }
             }
         }
