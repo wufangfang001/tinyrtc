@@ -61,14 +61,14 @@ extern "C" {
  * ========================================================================== */
 
 #if TINYRTC_DEBUG
-#define TINYRTC_LOG_DEBUG(fmt, ...) aosl_log(AOSL_LOG_DEBUG, "TinyRTC: " fmt, ##__VA_ARGS__)
+#define TINYRTC_LOG_DEBUG(fmt, ...) aosl_log(AOSL_LOG_DEBUG, "TinyRTC: " fmt "\n", ##__VA_ARGS__)
 #else
 #define TINYRTC_LOG_DEBUG(fmt, ...) do {} while(0)
 #endif
 
-#define TINYRTC_LOG_INFO(fmt, ...)  aosl_log(AOSL_LOG_INFO, "TinyRTC: " fmt, ##__VA_ARGS__)
-#define TINYRTC_LOG_WARN(fmt, ...)  aosl_log(AOSL_LOG_WARNING, "TinyRTC: " fmt, ##__VA_ARGS__)
-#define TINYRTC_LOG_ERROR(fmt, ...) aosl_log(AOSL_LOG_ERROR, "TinyRTC: " fmt, ##__VA_ARGS__)
+#define TINYRTC_LOG_INFO(fmt, ...)  aosl_log(AOSL_LOG_INFO, "TinyRTC: " fmt "\n", ##__VA_ARGS__)
+#define TINYRTC_LOG_WARN(fmt, ...)  aosl_log(AOSL_LOG_WARNING, "TinyRTC: " fmt "\n", ##__VA_ARGS__)
+#define TINYRTC_LOG_ERROR(fmt, ...) aosl_log(AOSL_LOG_ERROR, "TinyRTC: " fmt "\n", ##__VA_ARGS__)
 
 /* =============================================================================
  * Memory management - wrappers around AOSL
