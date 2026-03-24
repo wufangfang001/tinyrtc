@@ -185,6 +185,8 @@ struct tinyrtc_context {
     tinyrtc_log_level_t log_level;
     aosl_lock_t mutex;      /* For thread safety when accessing global state */
     int num_peers;          /* Number of active peer connections */
+    int peers_alloc;         /* Allocated size of peers array */
+    tinyrtc_peer_connection_t **peers; /* Array of peer connection pointers */
     tinyrtc_signaling_t *signaling;  /* Global signaling client (if used) */
 };
 

@@ -366,6 +366,8 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
     uint8_t hdr[2];
     int ret;
 
+    aosl_log(AOSL_LOG_INFO, "sig_read_ws_frame: starting to read frame header");
+
     bool is_wss = sig_ssl_configured(sig);
 
     for (int i = 0; i < 2; i++) {
@@ -391,6 +393,9 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
     uint8_t opcode = hdr[0] & 0x0F;
     bool masked = (hdr[1] & 0x80) != 0;
     uint8_t payload_len = hdr[1] & 0x7F;
+
+    aosl_log(AOSL_LOG_INFO, "sig_read_ws_frame: hdr: fin=%d opcode=%d masked=%d payload_len(7bit)=%d",
+            (int)fin, (int)opcode, (int)masked, (int)payload_len);
 
     size_t len = payload_len;
     int bytes_needed = 0;
@@ -524,6 +529,7 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
                 return 0; /* Need more fragments */
             }
             /* Finished single frame message */
+            aosl_log(AOSL_LOG_INFO, "sig_read_ws_frame: processing complete single frame, len=%zu", len);
             sig_process_message(sig, sig->recv_buf, len);
             sig->recv_len = 0;
             break;
@@ -668,6 +674,7 @@ static int sig_send_ws_frame(struct tinyrtc_signaling *sig, uint8_t opcode,
 
 /* Process incoming text message - parse JSON and invoke callback */
 static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *data, size_t len) {
+    aosl_log(AOSL_LOG_INFO, "sig_process_message: received message, len=%zu", len);
     /* Null-terminate for easy parsing */
     char *json = (char *)aosl_malloc(len + 1);
     if (!json) {

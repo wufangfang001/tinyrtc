@@ -100,7 +100,7 @@ static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
                     aosl_log(AOSL_LOG_INFO, "Remote answer set successfully\n");
                     g_got_answer = true;
                 }
-                aosl_free(event->data.answer);
+                // NOTE: sig_process_message already frees event->data.answer after callback, don't free again!
             }
             break;
         case TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE:
@@ -287,6 +287,7 @@ int main(int argc, char **argv)
         while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
             /* Process signaling messages */
             tinyrtc_process_events(ctx, 100);
+            tinyrtc_signaling_process(sig);
 
             /* If connected and we have a video file, send next NAL unit (frame) */
             if (tinyrtc_peer_connection_get_state(pc) == TINYRTC_PC_STATE_CONNECTED &&

@@ -111,7 +111,7 @@ static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
                     strcpy(g_pending_offer, event->data.offer);
                 }
                 g_got_offer = true;
-                aosl_free(event->data.offer);
+                // NOTE: sig_process_message already frees event->data.offer after callback, don't free again!
             }
             break;
         case TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE:
@@ -235,6 +235,7 @@ int main(int argc, char **argv)
         /* Poll until we get an offer */
         while (!g_got_offer && tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
             tinyrtc_process_events(ctx, 100);
+            tinyrtc_signaling_process(sig);
             aosl_msleep(100);
         }
 
@@ -283,6 +284,7 @@ int main(int argc, char **argv)
         /* Main loop */
         while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
             tinyrtc_process_events(ctx, 10);
+            tinyrtc_signaling_process(sig);
             aosl_msleep(10);
         }
 

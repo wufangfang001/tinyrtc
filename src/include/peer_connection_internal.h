@@ -12,7 +12,10 @@
 #define TINYRTC_PEER_CONNECTION_INTERNAL_H
 
 #include "common.h"
+#include "media.h"
+#include "dtls_srtp_internal.h"
 #include "sdp_internal.h"
+#include "ice_internal.h"
 #include "tinyrtc/peer_connection.h"
 
 #ifdef __cplusplus
@@ -72,16 +75,19 @@ struct tinyrtc_peer_connection {
     sdp_session_t local_sdp;
     sdp_session_t remote_sdp;
 
+    /* ICE session */
+    ice_session_t *ice;               /* ICE session */
     /* ICE gathering state */
     int ice_gathering_state;          /* 0 = new, 1 = gathering, 2 = complete */
     int num_local_candidates;
 
     /* DTLS state */
+    dtls_context_t *dtls;               /* DTLS context */
     int dtls_state;                    /* 0 = new, 1 = connecting, 2 = connected */
 
     /* SRTP keys (filled after DTLS completes) */
     bool srtp_initialized;
-    // TODO: srtp keys when we implement DTLS/SRTP
+    srtp_context_t *srtp;             /* SRTP context */
 
     /* Mutex for state protection */
     aosl_lock_t mutex;

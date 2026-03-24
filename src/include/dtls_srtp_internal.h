@@ -49,6 +49,7 @@ typedef struct dtls_context {
     mbedtls_x509_crt *cert;             /* Our certificate */
     mbedtls_pk_context *pkey;           /* Our private key */
     dtls_role_t role;
+    int socket;                         /* UDP socket file descriptor for I/O */
     char fingerprint[DTLS_FINGERPRINT_MAX_LEN * 3]; /* SHA-256 fingerprint in hex */
     bool handshake_complete;
     /* Store captured master secret for DTLS-SRTP key derivation
@@ -85,6 +86,15 @@ typedef struct srtp_context {
  * @return New DTLS context, NULL on error
  */
 dtls_context_t *dtls_init(dtls_role_t role);
+
+/**
+ * @brief Start DTLS handshake after ICE connected
+ *
+ * @param dtls DTLS context
+ * @param fd UDP socket file descriptor to use for DTLS
+ * @return TINYRTC_OK on success
+ */
+tinyrtc_error_t dtls_start(dtls_context_t *dtls, int fd);
 
 /**
  * @brief Destroy DTLS context
@@ -129,6 +139,16 @@ tinyrtc_error_t dtls_process_data(dtls_context_t *dtls, const uint8_t *data, siz
  * @return true if handshake complete
  */
 bool dtls_is_handshake_complete(dtls_context_t *dtls);
+
+/**
+ * @brief Get DTLS master secret after handshake completes
+ *
+ * @param dtls DTLS context
+ * @param buffer Output buffer for master secret (needs 48 bytes)
+ * @param len Buffer length
+ * @return true if master secret captured
+ */
+bool dtls_get_master_secret(dtls_context_t *dtls, unsigned char *buffer, size_t len);
 
 /**
  * @brief Derive SRTP keys after handshake completes

@@ -14,6 +14,12 @@ import sys
 # Connected clients: {room_id: [(writer, client_id), ...]}
 rooms = {}
 
+# Flush stdout after every print to see logs immediately
+old_print = print
+def print(*args, **kwargs):
+    old_print(*args, **kwargs)
+    sys.stdout.flush()
+
 GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
 async def handle_client(reader, writer):

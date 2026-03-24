@@ -46,6 +46,8 @@ int demo_init_aosl(void)
 {
     /* Set log level to INFO so we can see all logs in terminal */
     aosl_set_log_level(AOSL_LOG_INFO);
+    /* Disable stdout buffering to see logs immediately */
+    setvbuf(stdout, NULL, _IONBF, 0);
     aosl_log(AOSL_LOG_INFO, "Initializing AOSL for demo...\n");
     /* AOSL is initialized automatically when linked */
     return 0;

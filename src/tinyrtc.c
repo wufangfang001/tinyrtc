@@ -243,18 +243,19 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
                 unsigned char server_salt[14];
                 TINYRTC_LOG_DEBUG("Deriving SRTP keys");
                 dtls_derive_srtp_keys(pc->dtls, client_key, client_salt, server_key, server_salt);
-                if (dtls_get_master_secret(pc->dtls, master_secret, 48)) {
-                    /* SRTP key derivation: combine master secret with salt according to RFC 5764 */
-                    pc->srtp = srtp_init(master_secret, 48);
-                    if (pc->srtp != NULL) {
-                        pc->srtp_initialized = true;
-                        TINYRTC_LOG_INFO("DTLS handshake complete, SRTP initialized successfully");
-                        TINYRTC_LOG_INFO("TinyRTC: PeerConnection FULLY CONNECTED! Ready for media transport");
-                    } else {
-                        TINYRTC_LOG_ERROR("Failed to initialize SRTP after DTLS");
-                    }
+                if (pc->config.is_initiator) {
+                    /* We are the initiator (client) -> use client key/salt */
+                    pc->srtp = srtp_init(client_key, client_salt);
                 } else {
-                    TINYRTC_LOG_ERROR("Failed to get master secret from DTLS");
+                    /* We are the responder (server) -> use server key/salt */
+                    pc->srtp = srtp_init(server_key, server_salt);
+                }
+                if (pc->srtp != NULL) {
+                    pc->srtp_initialized = true;
+                    TINYRTC_LOG_INFO("DTLS handshake complete, SRTP initialized successfully");
+                    TINYRTC_LOG_INFO("TinyRTC: PeerConnection FULLY CONNECTED! Ready for media transport");
+                } else {
+                    TINYRTC_LOG_ERROR("Failed to initialize SRTP after DTLS");
                 }
             }
         }

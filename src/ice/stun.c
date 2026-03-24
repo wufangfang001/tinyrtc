@@ -16,36 +16,7 @@
 #include <stdio.h>
 #include <arpa/inet.h>
 
-/* =============================================================================
- * STUN Constants
- * ========================================================================== */
-
-/* STUN magic cookie */
-#define STUN_MAGIC_COOKIE 0x2112A442
-
-/* STUN message types */
-#define STUN_BINDING_REQUEST      0x0001
-#define STUN_BINDING_RESPONSE     0x0101
-#define STUN_BINDING_ERROR_RESPONSE 0x0111
-
-/* STUN attributes */
-#define STUN_ATTR_MAPPED_ADDRESS    0x0001
-#define STUN_ATTR_XOR_MAPPED_ADDRESS 0x0020
-#define STUN_ATTR_ERROR_CODE        0x0004
-#define STUN_ATTR_MESSAGE_INTEGRITY 0x0008
-#define STUN_ATTR_FINGERPRINT      0x8028
-#define STUN_ATTR_SOURCE_ADDRESS    0x0004
-
-/* =============================================================================
- * STUN packet header
- * ========================================================================== */
-
-typedef struct {
-    uint16_t type;
-    uint16_t length;
-    uint32_t magic_cookie;
-    uint8_t transaction_id[12];
-} stun_header_t;
+/* stun_header_t and constants already defined in ice_internal.h */
 
 /* =============================================================================
  * Local helpers
@@ -264,4 +235,27 @@ tinyrtc_error_t stun_process_response(ice_session_t *ice,
 
     TINYRTC_LOG_DEBUG("STUN response got mapped address %s:%u", mapped_addr, *mapped_port);
     return TINYRTC_OK;
+}
+
+size_t stun_create_binding_response(uint8_t *buffer, size_t buf_size,
+                                      stun_header_t *request_header)
+{
+    stun_header_t *resp = (stun_header_t *)buffer;
+    memset(buffer, 0, buf_size);
+
+    /* Copy transaction ID from request */
+    resp->type = htons(STUN_BINDING_RESPONSE);
+    resp->length = htons(0); /* No attributes for a simple connectivity check response */
+    resp->magic_cookie = htonl(STUN_MAGIC_COOKIE);
+
+    /* Copy transaction ID matches request */
+    for (int i = 0; i < 12; i++) {
+        resp->transaction_id[i] = request_header->transaction_id[i];
+    }
+
+    size_t total_len = sizeof(stun_header_t);
+    resp->length = htons(0);
+
+    TINYRTC_LOG_DEBUG("Created STUN binding response, size=%zu", total_len);
+    return total_len;
 }

@@ -13,12 +13,31 @@
 
 #include "common.h"
 #include "sdp_internal.h"
-#include <hal/aosl_hal_socket.h>
+#include "media.h"
 #include "tinyrtc/peer_connection.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+/* STUN constants and types */
+#define STUN_MAGIC_COOKIE 0x2112A442
+
+/* STUN message types */
+#define STUN_BINDING_REQUEST      0x0001
+#define STUN_BINDING_RESPONSE     0x0101
+#define STUN_BINDING_ERROR_RESPONSE 0x0111
+
+/* STUN attributes */
+#define STUN_ATTR_MAPPED_ADDRESS    0x0001
+#define STUN_ATTR_XOR_MAPPED_ADDRESS 0x0020
+#define STUN_ATTR_ERROR_CODE        0x0004
+#define STUN_ATTR_MESSAGE_INTEGRITY 0x0008
+#define STUN_ATTR_FINGERPRINT      0x8028
+#define STUN_ATTR_SOURCE_ADDRESS    0x0004
+
+typedef struct {
+    uint16_t type;
+    uint16_t length;
+    uint32_t magic_cookie;
+    uint8_t transaction_id[12];
+} stun_header_t;
 
 /* =============================================================================
  * ICE Constants
@@ -36,9 +55,9 @@ typedef enum {
 } ice_candidate_type_t;
 
 /* Candidate priority */
-#define ICE_PRIORITY_HOST       126 | (0 << 24)
-#define ICE_PRIORITY_SRFLX      110 | (0 << 24)
-#define ICE_PRIORITY_RELAY       100 | (0 << 24)
+#define ICE_PRIORITY_HOST       (126 << 24) | (0 << 8) | 126
+#define ICE_PRIORITY_SRFLX      (110 << 24) | (0 << 8) | 126
+#define ICE_PRIORITY_RELAY       (100 << 24) | (0 << 8) | 126
 
 /* =============================================================================
  * ICE Candidate internal structure
@@ -89,18 +108,20 @@ typedef struct {
 } ice_session_t;
 
 /* =============================================================================
- * STUN - Session Traversal Utilities for NAT
+ * STUN functions
  * ========================================================================== */
 
 /**
- * @brief Send STUN binding request to server
+ * @brief Send STUN binding request to get server reflexive candidate
  *
  * @param ice ICE session
  * @param server_addr Server address
  * @param port Server port
  * @return TINYRTC_OK on success
  */
-tinyrtc_error_t stun_send_binding_request(ice_session_t *ice, const char *server_addr, uint16_t port);
+tinyrtc_error_t stun_send_binding_request(ice_session_t *ice,
+                                          const char *server_addr,
+                                          uint16_t port);
 
 /**
  * @brief Process STUN response
@@ -109,6 +130,7 @@ tinyrtc_error_t stun_send_binding_request(ice_session_t *ice, const char *server
  * @param data Response data
  * @param len Response length
  * @param[out] mapped_addr Output mapped address
+ * @param mapped_addr_len Output buffer size
  * @param[out] mapped_port Output mapped port
  * @return TINYRTC_OK on success
  */
@@ -116,6 +138,17 @@ tinyrtc_error_t stun_process_response(ice_session_t *ice,
                                        const uint8_t *data, size_t len,
                                        char *mapped_addr, size_t mapped_addr_len,
                                        uint16_t *mapped_port);
+
+/**
+ * @brief Create STUN binding response to response to connectivity check
+ *
+ * @param buffer Output buffer
+ * @param buf_size Buffer size
+ * @param request_header Request header from incoming request
+ * @return Size of created response
+ */
+size_t stun_create_binding_response(uint8_t *buffer, size_t buf_size,
+                                     stun_header_t *request_header);
 
 /* =============================================================================
  * ICE functions
