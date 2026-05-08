@@ -269,7 +269,7 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
     }
 
     if (ret < 0) {
-        snprintf(sig->last_error, sizeof(sig->last_error),
+        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "Failed to send handshake: %d", ret);
         return -1;
     }
@@ -314,7 +314,7 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
 
     /* Check response status code */
     if (strstr(response, "101 Switching Protocols") == NULL) {
-        snprintf(sig->last_error, sizeof(sig->last_error),
+        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "Bad handshake response: expected 101, got:\n%.100s", response);
         return -1;
     }
@@ -326,7 +326,7 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
 
     char *accept_header = strstr(response, "Sec-WebSocket-Accept:");
     if (!accept_header) {
-        snprintf(sig->last_error, sizeof(sig->last_error),
+        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "No Sec-WebSocket-Accept in response");
         return -1;
     }
@@ -353,7 +353,7 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
     aosl_log(AOSL_LOG_INFO, "Signaling: received accept: '%s' (len=%zu)\n", accept_header, strlen(accept_header));
 
     if (strcmp(accept_header, expected_accept) != 0) {
-        snprintf(sig->last_error, sizeof(sig->last_error),
+        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "Invalid Sec-WebSocket-Accept: expected %s (len=%zu), got %s (len=%zu)",
                  expected_accept, strlen(expected_accept), accept_header, strlen(accept_header));
         return -1;
@@ -424,7 +424,7 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
             }
 
             if (ret <= 0) {
-                snprintf(sig->last_error, sizeof(sig->last_error),
+                snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                          "Failed to read extended payload length");
                 return -1;
             }
@@ -455,7 +455,7 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
             }
 
             if (ret <= 0) {
-                snprintf(sig->last_error, sizeof(sig->last_error),
+                snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                          "Failed to read mask key");
                 return -1;
             }
@@ -464,7 +464,7 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
 
     /* Ensure we have buffer space */
     if (len > SIG_MAX_RECV_BUF) {
-        snprintf(sig->last_error, sizeof(sig->last_error),
+        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "WebSocket frame too large: %zu bytes (max %d)",
                  len, SIG_MAX_RECV_BUF);
         return -1;
@@ -483,7 +483,7 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
         }
 
         if (ret <= 0) {
-            snprintf(sig->last_error, sizeof(sig->last_error),
+            snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                      "Failed to read payload at offset %zu", i);
             return -1;
         }
@@ -507,7 +507,7 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
                     sig->message_cap = SIG_MAX_RECV_BUF;
                     sig->message_buf = (uint8_t *)aosl_malloc(sig->message_cap);
                     if (!sig->message_buf) {
-                        snprintf(sig->last_error, sizeof(sig->last_error),
+                        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                                  "Out of memory for fragmented message");
                         return -1;
                     }
@@ -516,7 +516,7 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
 
                 /* Append to buffer */
                 if (sig->message_len + len > sig->message_cap) {
-                    snprintf(sig->last_error, sizeof(sig->last_error),
+                    snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                              "Fragmented message exceeds buffer size");
                     return -1;
                 }
@@ -533,12 +533,12 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
 
         case WS_OPCODE_CONTINUE: {
             if (sig->message_buf == NULL) {
-                snprintf(sig->last_error, sizeof(sig->last_error),
+                snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                          "Invalid state: fragmented message without buffer");
                 return -1;
             }
             if (sig->message_len + len > sig->message_cap) {
-                snprintf(sig->last_error, sizeof(sig->last_error),
+                snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                          "Fragmented message exceeds buffer size");
                 return -1;
             }
@@ -625,7 +625,7 @@ static int sig_send_ws_frame(struct tinyrtc_signaling *sig, uint8_t opcode,
     uint8_t send_buf[SIG_MAX_SEND_BUF];
     size_t total_len = header_len + len;
     if (total_len > sizeof(send_buf)) {
-        snprintf(sig->last_error, sizeof(sig->last_error),
+        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "Send buffer too small: %zu > %zu", total_len, sizeof(send_buf));
         return -1;
     }
@@ -656,7 +656,7 @@ static int sig_send_ws_frame(struct tinyrtc_signaling *sig, uint8_t opcode,
         }
 
         if (ret < 0) {
-            snprintf(sig->last_error, sizeof(sig->last_error),
+            snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                      "WebSocket send failed: %d", ret);
             sig->state = TINYRTC_SIGNALING_ERROR;
             return -1;
@@ -929,7 +929,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
                                      &sig->entropy,
                                      (const unsigned char *)pers, strlen(pers));
     if (ret != 0) {
-        snprintf(sig->last_error, sizeof(sig->last_error),
+        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "mbedtls_ctr_drbg_seed failed: -0x%04x", -ret);
         sig->state = TINYRTC_SIGNALING_ERROR;
         goto error;
@@ -974,7 +974,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
     char host[128];
     uint16_t port;
     if (sig_parse_url(sig->server_url, host, sizeof(host), &port, &sig->is_wss) != 0) {
-        snprintf(sig->last_error, sizeof(sig->last_error),
+        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "Invalid URL: %s", sig->server_url);
         sig->state = TINYRTC_SIGNALING_ERROR;
         goto error;
@@ -988,7 +988,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
     snprintf(port_str, sizeof(port_str), "%d", port);
     ret = mbedtls_net_connect(&sig->net, host, port_str, MBEDTLS_NET_PROTO_TCP);
     if (ret != 0) {
-        snprintf(sig->last_error, sizeof(sig->last_error),
+        snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "Failed to connect to %s:%s: -0x%04x", host, port_str, -ret);
         sig->state = TINYRTC_SIGNALING_ERROR;
         goto error;
@@ -1014,7 +1014,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
 
         ret = mbedtls_ssl_setup(&sig->ssl, &sig->conf);
         if (ret != 0) {
-            snprintf(sig->last_error, sizeof(sig->last_error),
+            snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                      "mbedtls_ssl_setup failed: -0x%04x", -ret);
             sig->state = TINYRTC_SIGNALING_ERROR;
             goto error;
@@ -1031,7 +1031,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
                  ret == MBEDTLS_ERR_SSL_WANT_WRITE);
 
         if (ret != 0) {
-            snprintf(sig->last_error, sizeof(sig->last_error),
+            snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                      "SSL handshake failed: -0x%04x", -ret);
             sig->state = TINYRTC_SIGNALING_ERROR;
             goto error;
