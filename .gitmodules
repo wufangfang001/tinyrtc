@@ -7,4 +7,4 @@
 	branch = archive/mbedtls-2.28
 [submodule "sdp-transfer"]
 	path = sdp-transfer
-	url = git@github.com:wufangfang001/sdp-transfer.git
+	url = https://github.com/wufangfang001/sdp-transfer.git
