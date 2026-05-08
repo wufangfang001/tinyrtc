@@ -131,6 +131,20 @@ static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
     }
 }
 
+static void print_usage(const char *prog_name)
+{
+    printf("Usage: %s [options]\n\n", prog_name);
+    printf("Options:\n");
+    printf("  -h, --help              Show this help message\n");
+    printf("  --room <room-id>        Use automatic signaling with specified room ID\n");
+    printf("  --server <url>          Signaling server URL (default: ws://localhost:8080)\n");
+    printf("  --offer <file>          Use manual mode with offer from file\n");
+    printf("\n");
+    printf("Examples:\n");
+    printf("  Automatic mode: %s --room my-room --server ws://your-server-ip:8080\n", prog_name);
+    printf("  Manual mode:    %s --offer offer.sdp\n", prog_name);
+}
+
 int main(int argc, char **argv)
 {
     const char *room_id = "tinyrtc-demo";
@@ -138,6 +152,13 @@ int main(int argc, char **argv)
     const char *default_signaling_server = "ws://localhost:8080";
 
     /* Parse arguments */
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+            print_usage(argv[0]);
+            return 0;
+        }
+    }
+
     if (argc >= 3 && strcmp(argv[1], "--room") == 0) {
         room_id = argv[2];
         auto_signaling = true;
