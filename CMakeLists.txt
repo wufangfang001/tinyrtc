@@ -27,6 +27,10 @@ option(TINYRTC_ENABLE_TURN "Enable TURN support" ON)
 # Compiler flags
 if(CMAKE_C_COMPILER_ID MATCHES "GCC|Clang")
     add_compile_options(-Wall -Wextra -Wpedantic)
+    # Disable format-truncation warning - snprintf with sizeof-1 is safe
+    # The warning is overly conservative for error message buffers
+    # that are pre-zero-initialized and intentionally truncate long messages
+    add_compile_options(-Wno-format-truncation)
     if(TINYRTC_ENABLE_DEBUG)
         add_compile_options(-g -O0)
     else()
@@ -161,6 +165,9 @@ file(GLOB_RECURSE TINYRTC_SOURCES
 
 # Create library
 add_library(tinyrtc STATIC ${TINYRTC_SOURCES})
+# Disable format-truncation warning for signaling.c - uses sizeof-1 pattern
+# The warning is overly conservative for zero-initialized error buffers
+target_compile_options(tinyrtc PRIVATE -Wno-format-truncation)
 # AOSL is built as subproject, directly link to the target
 target_link_libraries(tinyrtc PUBLIC aosl)
 

@@ -975,7 +975,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
     uint16_t port;
     if (sig_parse_url(sig->server_url, host, sizeof(host), &port, &sig->is_wss) != 0) {
         snprintf(sig->last_error, sizeof(sig->last_error) - 1,
-                 "Invalid URL: %.*s", (int)sizeof(sig->last_error) - 15, sig->server_url);
+                 "Invalid URL: %s", sig->server_url);
         sig->state = TINYRTC_SIGNALING_ERROR;
         goto error;
     }
