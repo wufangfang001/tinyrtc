@@ -101,39 +101,47 @@ Uses public signaling server to automatically connect:
 6. SDP will be exchanged automatically via public signaling server
 7. Connection established - you can see video from browser
 
-The public signaling server `wss://signal-master.appspot.com:443` is used by default. However, this public server is often unreachable. We provide a simple Python signaling server for local area network testing:
+The public signaling server `wss://signal-master.appspot.com:443` is used by default. However, this public server is often unreachable. We provide a complete signaling server solution via the `sdp-transfer` submodule for local area network testing:
 
 ### Run your own signaling server (Recommended for LAN testing)
 
-We provide two versions of simple signaling server (same functionality):
-
-- `simple-signaling-server.py` - uses the `websockets` library (cleaner code)
-- `simple-signaling-server-raw.py` - **no third-party dependencies**, pure asyncio TCP with manual WebSocket handshake
+The [sdp-transfer](https://github.com/wufangfang001/sdp-transfer) signaling server is included as a git submodule, providing a complete WebSocket-based SDP exchange solution with:
+- Room-based connection management
+- SSL/TLS support with automatic certificate generation
+- Browser-based test interface
+- Heartbeat and idle timeout cleanup
 
 Start the server:
 
 ```bash
-# Start simple signaling server on port 8080 (needs websockets library)
-cd tools/
-python3 simple-signaling-server.py 8080
+# First, ensure submodule is initialized
+git submodule update --init --remote
 
-# Or use the raw version (no dependencies)
-python3 simple-signaling-server-raw.py 8080
+# Install dependencies
+cd sdp-transfer/
+pip3 install -r requirements.txt
+
+# Generate SSL certificate (for HTTPS/WSS)
+python3 generate_cert.py
+
+# Start signaling server on port 8080
+python3 signaling_server.py --port 8080
 ```
+
+The server will be available at:
+- **Web interface**: `https://your-server-ip:8080`
+- **WebSocket endpoint**: `wss://your-server-ip:8080/ws`
 
 Then use it with:
 ```bash
 # In TinyRTC receiver
-./tinyrtc_recv --room my-test-room --server ws://your-server-ip:8080
+./tinyrtc_recv --room my-test-room --server wss://your-server-ip:8080/ws
 
-# In browser_test.html, the signaling URL will be automatically used
-# when you connect with the same room ID
+# Or with sender
+./tinyrtc_send --room my-test-room --server wss://your-server-ip:8080/ws
 ```
 
-You can specify your own signaling server with command line:
-```bash
-./tinyrtc_recv --room my-test-room --server ws://your-signaling-server:8080
-```
+In your browser, open `https://your-server-ip:8080` to access the web interface for SDP exchange testing.
 
 ### Mode 2: Manual SDP Exchange (Original)
 
