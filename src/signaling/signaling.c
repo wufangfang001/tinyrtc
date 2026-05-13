@@ -974,7 +974,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
             aosl_log(AOSL_LOG_DEBUG, "Signaling: CA certificates loaded\n");
         }
     } else {
-        aosl_log(AOSL_LOG_INFO, "Signaling: SSL certificate verification disabled");
+        aosl_log(AOSL_LOG_INFO, "Signaling: SSL certificate verification disabled\n");
     }
 
     /* Parse URL */
@@ -1000,13 +1000,6 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
         sig->state = TINYRTC_SIGNALING_ERROR;
         goto error;
     }
-
-    /* Set socket to non-blocking mode so that mbedtls_net_recv returns immediately when no data
-     * is available, allowing the main loop to continue processing ICE connectivity checks,
-     * send STUN pings, process DTLS, etc. Without this, the main loop will block forever
-     * waiting for new WebSocket messages and ICE connectivity will never progress. */
-    int flags = fcntl(sig->net.fd, F_GETFL, 0);
-    fcntl(sig->net.fd, F_SETFL, flags | O_NONBLOCK);
 
     aosl_log(AOSL_LOG_INFO, "Signaling: TCP connected to %s:%s\n", host, port_str);
 
@@ -1063,6 +1056,13 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
 
         aosl_log(AOSL_LOG_DEBUG, "Signaling: SSL handshake completed\n");
     }
+
+    /* Set socket to non-blocking mode so that mbedtls_net_recv returns immediately when no data
+     * is available, allowing the main loop to continue processing ICE connectivity checks,
+     * send STUN pings, process DTLS, etc. Without this, the main loop will block forever
+     * waiting for new WebSocket messages and ICE connectivity will never progress. */
+    int flags = fcntl(sig->net.fd, F_GETFL, 0);
+    fcntl(sig->net.fd, F_SETFL, flags | O_NONBLOCK);
 
     sig->state = TINYRTC_SIGNALING_CONNECTING;
 
