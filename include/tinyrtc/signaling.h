@@ -26,6 +26,7 @@ typedef struct {
     char *room_id;         /**< Room/channel ID to join */
     char *client_id;       /**< Optional client ID (auto-generated if NULL) */
     bool auto_connect;     /**< Auto-connect on creation */
+    bool disable_cert_verify; /**< Disable SSL certificate verification (for self-signed certs) */
 } tinyrtc_signaling_config_t;
 
 /**

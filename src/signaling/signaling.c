@@ -53,6 +53,7 @@ struct tinyrtc_signaling {
     char client_id[64];
     bool auto_connect;
     bool is_wss;             /* Whether we're using SSL/TLS (wss) */
+    bool disable_cert_verify; /* Disable SSL certificate verification */
 
     /* State */
     tinyrtc_signaling_state_t state;
@@ -889,7 +890,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
         return NULL;
     }
 
-    aosl_log(AOSL_LOG_DEBUG, "signaling: creating client instance... url=%s room=%s",
+    aosl_log(AOSL_LOG_DEBUG, "signaling: creating client instance... url=%s room=%s\n",
             config->url, config->room_id);
 
     tinyrtc_signaling_t *sig = (tinyrtc_signaling_t *)aosl_malloc(sizeof(*sig));
@@ -913,6 +914,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
         strncpy(sig->room_id, config->room_id, sizeof(sig->room_id) - 1);
     }
     sig->auto_connect = config->auto_connect;
+    sig->disable_cert_verify = config->disable_cert_verify;
 
     /* Initialize mbedTLS */
     mbedtls_net_init(&sig->net);
@@ -922,7 +924,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
     mbedtls_ssl_config_init(&sig->conf);
     mbedtls_x509_crt_init(&sig->cacert);
 
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: mbedTLS structures initialized");
+    aosl_log(AOSL_LOG_DEBUG, "Signaling: mbedTLS structures initialized\n");
 
     const char *pers = "tinyrtc-signaling";
     int ret = mbedtls_ctr_drbg_seed(&sig->ctr_drbg, mbedtls_entropy_func,
@@ -942,9 +944,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
         sig_generate_client_id(sig, sig->client_id, sizeof(sig->client_id));
     }
 
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: CTR-DRBG seeded");
-
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: CTR-DRBG seeded");
+    aosl_log(AOSL_LOG_DEBUG, "Signaling: CTR-DRBG seeded\n");
 
     /* Load system CA bundle for certificate verification */
     bool ca_loaded = false;
@@ -955,19 +955,26 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
         NULL
     };
 
-    for (int i = 0; ca_paths[i] != NULL; i++) {
-        ret = mbedtls_x509_crt_parse_file(&sig->cacert, ca_paths[i]);
-        if (ret == 0) {
-            ca_loaded = true;
-            break;
-        }
-    }
+    /* Check if certificate verification is disabled */
+    bool verify_disabled = sig->disable_cert_verify;
 
-    if (!ca_loaded) {
-        aosl_log(AOSL_LOG_WARNING, "Signaling: Could not load CA certificates, "
-                                "disabling certificate verification");
+    if (!verify_disabled) {
+        for (int i = 0; ca_paths[i] != NULL; i++) {
+            ret = mbedtls_x509_crt_parse_file(&sig->cacert, ca_paths[i]);
+            if (ret == 0) {
+                ca_loaded = true;
+                break;
+            }
+        }
+
+        if (!ca_loaded) {
+            aosl_log(AOSL_LOG_WARNING, "Signaling: Could not load CA certificates, "
+                                    "disabling certificate verification");
+        } else {
+            aosl_log(AOSL_LOG_DEBUG, "Signaling: CA certificates loaded\n");
+        }
     } else {
-        aosl_log(AOSL_LOG_DEBUG, "Signaling: CA certificates loaded");
+        aosl_log(AOSL_LOG_INFO, "Signaling: SSL certificate verification disabled");
     }
 
     /* Parse URL */
@@ -980,7 +987,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
         goto error;
     }
 
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: URL parsed host=%s port=%d is_wss=%d",
+    aosl_log(AOSL_LOG_DEBUG, "Signaling: URL parsed host=%s port=%d is_wss=%d\n",
             host, port, sig->is_wss);
 
     /* Connect TCP socket */
@@ -1005,8 +1012,9 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
 
     if (sig->is_wss) {
         /* Setup SSL */
+        bool verify_disabled = sig->disable_cert_verify;
         mbedtls_ssl_conf_authmode(&sig->conf,
-                                  ca_loaded ? MBEDTLS_SSL_VERIFY_REQUIRED
+                                  (ca_loaded && !verify_disabled) ? MBEDTLS_SSL_VERIFY_REQUIRED
                                             : MBEDTLS_SSL_VERIFY_NONE);
         mbedtls_ssl_conf_ca_chain(&sig->conf, &sig->cacert, NULL);
         mbedtls_ssl_conf_rng(&sig->conf, mbedtls_ctr_drbg_random,
@@ -1024,7 +1032,8 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
         mbedtls_ssl_set_bio(&sig->ssl, &sig->net, mbedtls_net_send,
                               mbedtls_net_recv, NULL);
 
-        /* SSL handshake */
+        /* SSL handshake - use blocking mode during handshake */
+        aosl_log(AOSL_LOG_DEBUG, "Signaling: Starting SSL handshake...\n");
         do {
             ret = mbedtls_ssl_handshake(&sig->ssl);
         } while (ret == MBEDTLS_ERR_SSL_WANT_READ ||
@@ -1036,6 +1045,8 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
             sig->state = TINYRTC_SIGNALING_ERROR;
             goto error;
         }
+
+        aosl_log(AOSL_LOG_DEBUG, "Signaling: SSL handshake completed successfully\n");
 
         /* Verify certificate */
         if (ca_loaded) {
@@ -1050,7 +1061,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
             }
         }
 
-        aosl_log(AOSL_LOG_DEBUG, "Signaling: SSL handshake completed");
+        aosl_log(AOSL_LOG_DEBUG, "Signaling: SSL handshake completed\n");
     }
 
     sig->state = TINYRTC_SIGNALING_CONNECTING;
@@ -1069,7 +1080,7 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
     snprintf(presence_json, sizeof(presence_json),
              "{\"checkPresence\": true, \"channel\": \"%s\"}",
              sig->room_id);
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: sending presence check: %s", presence_json);
+    aosl_log(AOSL_LOG_DEBUG, "Signaling: sending presence check: %s\n", presence_json);
 
     ret = sig_send_ws_frame(sig, WS_OPCODE_TEXT,
                            (const unsigned char *)presence_json, strlen(presence_json));
@@ -1216,7 +1227,7 @@ tinyrtc_error_t tinyrtc_signaling_send_offer(
 
     int ret = sig_send_ws_frame(sig, WS_OPCODE_TEXT, (const uint8_t *)json, len);
     if (ret == 0) {
-        aosl_log(AOSL_LOG_DEBUG, "Signaling: sent offer (%d bytes)", len);
+        aosl_log(AOSL_LOG_DEBUG, "Signaling: sent offer (%d bytes)\n", len);
     }
     return ret == 0 ? TINYRTC_OK : TINYRTC_ERROR_NETWORK;
 }
@@ -1256,7 +1267,7 @@ tinyrtc_error_t tinyrtc_signaling_send_answer(
 
     int ret = sig_send_ws_frame(sig, WS_OPCODE_TEXT, (const uint8_t *)json, len);
     if (ret == 0) {
-        aosl_log(AOSL_LOG_DEBUG, "Signaling: sent answer (%d bytes)", len);
+        aosl_log(AOSL_LOG_DEBUG, "Signaling: sent answer (%d bytes)\n", len);
     }
     return ret == 0 ? TINYRTC_OK : TINYRTC_ERROR_NETWORK;
 }
@@ -1274,7 +1285,7 @@ tinyrtc_error_t tinyrtc_signaling_send_candidate(
     }
 
     /* TODO: implement when we have full ICE candidate support in TinyRTC */
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: ICE candidate sending not implemented yet");
+    aosl_log(AOSL_LOG_DEBUG, "Signaling: ICE candidate sending not implemented yet\n");
     return TINYRTC_OK;
 }
 

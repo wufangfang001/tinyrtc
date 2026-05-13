@@ -127,10 +127,11 @@ static void print_usage(const char *prog_name)
     printf("  -h, --help              Show this help message\n");
     printf("  --room <room-id>        Use automatic signaling with specified room ID\n");
     printf("  --server <url>          Signaling server URL (default: ws://localhost:8080)\n");
+    printf("  --no-verify             Skip SSL certificate verification (for self-signed certs)\n");
     printf("  --with-answer <file>    Use manual mode with answer from file\n");
     printf("\n");
     printf("Examples:\n");
-    printf("  Automatic mode: %s --room my-room --server ws://your-server-ip:8080\n", prog_name);
+    printf("  Automatic mode: %s --room my-room --server wss://your-server-ip:8766 --no-verify\n", prog_name);
     printf("  Manual mode:    %s --with-answer answer.sdp\n", prog_name);
 }
 
@@ -139,12 +140,16 @@ int main(int argc, char **argv)
     const char *room_id = "tinyrtc-demo";
     bool auto_signaling = false;
     const char *default_signaling_server = "ws://localhost:8080";
+    bool disable_cert_verify = false;
 
     /* Parse arguments */
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             return 0;
+        }
+        if (strcmp(argv[i], "--no-verify") == 0 || strcmp(argv[i], "-k") == 0) {
+            disable_cert_verify = true;
         }
     }
 
@@ -244,6 +249,7 @@ int main(int argc, char **argv)
         sig_config.room_id = (char *)room_id;
         sig_config.client_id = NULL; /* auto-generate */
         sig_config.auto_connect = true;
+        sig_config.disable_cert_verify = disable_cert_verify;
 
         aosl_log(AOSL_LOG_INFO, "Calling tinyrtc_signaling_create...\n");
         tinyrtc_signaling_t *sig = tinyrtc_signaling_create(
