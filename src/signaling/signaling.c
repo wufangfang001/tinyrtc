@@ -684,117 +684,95 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
 
     aosl_log(AOSL_LOG_DEBUG, "Signaling: received message: %.100s...", json);
 
-    /* The protocol format from WebRTC-Experiment is:
+    /* The protocol format from Python signaling server is:
+     * Simple flat format with "type" field at top level:
      * {
-     *   "sender": "sender-id",
-     *   "channel": "channel-id",
-     *   "message": { ... actual message ... }
+     *   "type": "joined",
+     *   "role": "caller"|"callee",
+     *   "room": "room-id",
+     *   "iceServers": [...]
      * }
-     *
-     * Or for initial presence check it's:
      * {
-     *   "isChannelPresent": false
+     *   "type": "peer-joined"
+     * }
+     * {
+     *   "type": "offer",
+     *   "sdp": "..."
+     * }
+     * {
+     *   "type": "answer",
+     *   "sdp": "..."
+     * }
+     * {
+     *   "type": "ice-candidate",
+     *   "candidate": "..."
+     * }
+     * {
+     *   "type": "error",
+     *   "message": "..."
      * }
      */
 
-    /* Check for presence check response - only match if it's a top-level key
-     * Previously we used strstr which could match inside sdp and cause false positives
-     */
-    bool is_presence_response = false;
-    if (strstr(json, "\"isChannelPresent\"") != NULL) {
-        /* Check if it's at top level - look before the first { after the key doesn't have another { before it
-         * This is still simplistic but good enough to avoid false positives
-         */
-        char *pos = strstr(json, "\"isChannelPresent\"");
-        int braces = 0;
-        for (char *p = json; p < pos; p++) {
-            if (*p == '{') braces++;
-            else if (*p == '}') braces--;
-        }
-        // If braces == 0, this is top-level key, it's a presence response
-        if (braces == 0) {
-            is_presence_response = true;
-        }
-    }
-    if (is_presence_response) {
-        /* This is just the presence response, ignore it */
-        aosl_log(AOSL_LOG_DEBUG, "Signaling: got presence check response");
-        aosl_free(json);
-        return;
-    }
-
-    /* Check if this message is for our channel and from another sender */
-    /* We need to find "channel" and "sender" */
-    char *channel_ptr = strstr(json, "\"channel\"");
-    if (!channel_ptr) {
-        aosl_free(json);
-        return;
-    }
-
-    char *sender_ptr = strstr(json, "\"sender\"");
-    if (!sender_ptr) {
+    /* Find the type field */
+    char *type_ptr = strstr(json, "\"type\"");
+    if (!type_ptr) {
+        aosl_log(AOSL_LOG_WARNING, "Signaling: message missing type field");
         aosl_free(json);
         return;
     }
 
     /* Skip to the value */
-    channel_ptr = strchr(channel_ptr + 8, ':');
-    sender_ptr = strchr(sender_ptr + 7, ':');
-    if (!channel_ptr || !sender_ptr) {
+    type_ptr = strchr(type_ptr + 6, ':');
+    if (!type_ptr) {
         aosl_free(json);
         return;
     }
 
-    /* Extract values (very simplistic parsing) */
-    while (*channel_ptr && (*channel_ptr == ':' || *channel_ptr == ' ' || *channel_ptr == '\"')) {
-        channel_ptr++;
-    }
-    while (*sender_ptr && (*sender_ptr == ':' || *sender_ptr == ' ' || *sender_ptr == '\"')) {
-        sender_ptr++;
+    while (*type_ptr && (*type_ptr == ':' || *type_ptr == ' ' || *type_ptr == '"')) {
+        type_ptr++;
     }
 
-    /* Check if this is our channel and not from us */
-    if (strncmp(channel_ptr, sig->room_id, strlen(sig->room_id)) != 0) {
-        aosl_free(json);
-        return;
-    }
-
-    if (strncmp(sender_ptr, sig->client_id, strlen(sig->client_id)) == 0) {
-        /* Ignore our own messages */
-        aosl_free(json);
-        return;
-    }
-
-    /* Find the message field */
-    char *message_ptr = strstr(json, "\"message\"");
-    if (!message_ptr) {
-        aosl_free(json);
-        return;
-    }
-
-    /* Find where the message object starts */
-    message_ptr = strchr(message_ptr + 8, '{');
-    if (!message_ptr) {
-        aosl_free(json);
-        return;
-    }
+    /* Now type_ptr points to the type value */
 
     /* Check message type */
     tinyrtc_signal_event_type_t event_type;
     bool have_type = false;
 
-    if (strstr(message_ptr, "\"type\"") && strstr(message_ptr, "\"offer\"")) {
+    if (strncmp(type_ptr, "joined", 6) == 0) {
+        /* Server acknowledged join - success response, no callback needed */
+        aosl_log(AOSL_LOG_INFO, "Signaling: joined room %s successfully", sig->room_id);
+        aosl_free(json);
+        return;
+    } else if (strncmp(type_ptr, "peer-joined", 11) == 0) {
+        /* Peer has joined - we should send offer now */
+        aosl_log(AOSL_LOG_INFO, "Signaling: peer joined room, ready to send offer");
+        /* TODO: trigger send offer callback */
+        aosl_free(json);
+        return;
+    } else if (strncmp(type_ptr, "offer", 5) == 0) {
         event_type = TINYRTC_SIGNAL_EVENT_OFFER;
         have_type = true;
-    } else if (strstr(message_ptr, "\"type\"") && strstr(message_ptr, "\"answer\"")) {
+    } else if (strncmp(type_ptr, "answer", 6) == 0) {
         event_type = TINYRTC_SIGNAL_EVENT_ANSWER;
         have_type = true;
-    } else if (strstr(message_ptr, "\"type\"") && strstr(message_ptr, "\"candidate\"")) {
+    } else if (strncmp(type_ptr, "ice-candidate", 13) == 0) {
         event_type = TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE;
         have_type = true;
-    }
-
-    if (!have_type) {
+    } else if (strncmp(type_ptr, "error", 5) == 0) {
+        /* Error message from server */
+        char *msg_ptr = strstr(json, "\"message\"");
+        if (msg_ptr) {
+            msg_ptr = strchr(msg_ptr + 9, ':');
+            if (msg_ptr) {
+                while (*msg_ptr && (*msg_ptr == ':' || *msg_ptr == ' ' || *msg_ptr == '"')) {
+                    msg_ptr++;
+                }
+                char *end = msg_ptr;
+                while (*end && *end != '"' && *end != '}' && *end != ',') end++;
+                *end = '\0';
+                aosl_log(AOSL_LOG_ERROR, "Signaling: server error - %s", msg_ptr);
+            }
+        }
         aosl_free(json);
         return;
     }
@@ -803,7 +781,7 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
     if (sig->callback) {
         tinyrtc_signal_event_t event;
         event.type = event_type;
-        event.from_client_id = sender_ptr;
+        event.from_client_id = "server";
 
         /* Initialize pointers to NULL */
         event.data.offer = NULL;
@@ -812,7 +790,7 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
 
         /* Extract the actual data based on type */
         if (event_type == TINYRTC_SIGNAL_EVENT_OFFER || event_type == TINYRTC_SIGNAL_EVENT_ANSWER) {
-            char *found = strstr(message_ptr, "\"sdp\"");
+            char *found = strstr(json, "\"sdp\"");
             if (found) {
                 found = strchr(found + 5, ':');
                 if (found) {
@@ -1075,15 +1053,15 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
 
     sig->state = TINYRTC_SIGNALING_CONNECTED;
 
-    /* Send presence check according to protocol */
-    char presence_json[512];
-    snprintf(presence_json, sizeof(presence_json),
-             "{\"checkPresence\": true, \"channel\": \"%s\"}",
+    /* Send join message according to protocol */
+    char join_json[512];
+    snprintf(join_json, sizeof(join_json),
+             "{\"type\": \"join\", \"room\": \"%s\"}",
              sig->room_id);
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: sending presence check: %s\n", presence_json);
+    aosl_log(AOSL_LOG_DEBUG, "Signaling: sending join request: %s\n", join_json);
 
     ret = sig_send_ws_frame(sig, WS_OPCODE_TEXT,
-                           (const unsigned char *)presence_json, strlen(presence_json));
+                           (const unsigned char *)join_json, strlen(join_json));
     if (ret != 0) {
         /* Error already set in sig_send_ws_frame */
         sig->state = TINYRTC_SIGNALING_ERROR;
@@ -1203,22 +1181,15 @@ tinyrtc_error_t tinyrtc_signaling_send_offer(
         return TINYRTC_ERROR_INVALID_ARG;
     }
 
-    /* Build JSON according to expected format */
+    /* Build JSON according to Python server expected format - simple flat format */
     /* Need to escape SDP because it contains newlines */
     char json[8192];
     char escaped_sdp[4096];
     int escaped_len = sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
 
     int len = snprintf(json, sizeof(json),
-        "{\n"
-        "  \"sender\": \"%s\",\n"
-        "  \"channel\": \"%s\",\n"
-        "  \"message\": {\n"
-        "    \"type\": \"offer\",\n"
-        "    \"sdp\": \"%s\"\n"
-        "  }\n"
-        "}",
-        sig->client_id, sig->room_id, escaped_sdp
+        "{\"type\": \"offer\", \"sdp\": \"%s\"}",
+        escaped_sdp
     );
 
     if (len >= (int)sizeof(json)) {
@@ -1243,22 +1214,15 @@ tinyrtc_error_t tinyrtc_signaling_send_answer(
         return TINYRTC_ERROR_INVALID_ARG;
     }
 
-    /* Build JSON according to expected format */
+    /* Build JSON according to Python server expected format - simple flat format */
     /* Need to escape SDP because it contains newlines */
     char json[8192];
     char escaped_sdp[4096];
     int escaped_len = sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
 
     int len = snprintf(json, sizeof(json),
-        "{\n"
-        "  \"sender\": \"%s\",\n"
-        "  \"channel\": \"%s\",\n"
-        "  \"message\": {\n"
-        "    \"type\": \"answer\",\n"
-        "    \"sdp\": \"%s\"\n"
-        "  }\n"
-        "}",
-        sig->client_id, sig->room_id, escaped_sdp
+        "{\"type\": \"answer\", \"sdp\": \"%s\"}",
+        escaped_sdp
     );
 
     if (len >= (int)sizeof(json)) {
