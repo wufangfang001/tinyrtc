@@ -308,34 +308,22 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                         while (*p != ' ' && *p != '\0' && *p != '\n') p++;
                         if (*p == ' ') p++;
 
-                        /* Copy codec info (name/rate/channels) */
-                        copy_until(codec_info, sizeof(codec_info), &p, '\n');
+                        /* Format: <codec-name> <clock-rate>[/<channels>] */
+                        /* First, copy codec name (up to space) */
+                        copy_until(codec_name, sizeof(codec_name), &p, ' ');
 
-                        /* Split by / */
-                        char *slash = strchr(codec_info, '/');
+                        /* Then copy clock rate and channels info */
+                        char rate_channels[64];
+                        copy_until(rate_channels, sizeof(rate_channels), &p, '\n');
+
+                        /* Split rate_channels by / */
+                        char *slash = strchr(rate_channels, '/');
                         if (slash) {
                             *slash = '\0';
-                            strncpy(codec_name, codec_info, sizeof(codec_name) - 1);
-                            codec_name[sizeof(codec_name) - 1] = '\0';
-
-                            /* Parse clock rate */
-                            char *rate_start = slash + 1;
-                            slash = strchr(rate_start, '/');
-                            if (slash) {
-                                *slash = '\0';
-                                strncpy(clock_rate_str, rate_start, sizeof(clock_rate_str) - 1);
-                                clock_rate_str[sizeof(clock_rate_str) - 1] = '\0';
-                                channels = atoi(slash + 1);
-                            } else {
-                                strncpy(clock_rate_str, rate_start, sizeof(clock_rate_str) - 1);
-                                clock_rate_str[sizeof(clock_rate_str) - 1] = '\0';
-                            }
-                            clock_rate = (uint32_t)atoi(clock_rate_str);
+                            clock_rate = (uint32_t)atoi(rate_channels);
+                            channels = atoi(slash + 1);
                         } else {
-                            /* No slash, just copy codec name */
-                            strncpy(codec_name, codec_info, sizeof(codec_name) - 1);
-                            codec_name[sizeof(codec_name) - 1] = '\0';
-                            clock_rate = 0;
+                            clock_rate = (uint32_t)atoi(rate_channels);
                         }
 
                         /* Find matching media track and update codec info */
