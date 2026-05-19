@@ -282,7 +282,8 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                     /* a=mid:<mid-value> - set mid for current media track */
                     if (session->num_media > 0) {
                         char mid_value[32];
-                        /* Skip the ':' (we're already past it due to copy_until(':') */
+                        /* Skip the ':' (we're at it after copy_until(':') */
+                        if (*p == ':') p++;
                         copy_until(mid_value, sizeof(mid_value), &p, '\n');
                         /* Set mid for the last added media track */
                         strncpy(session->media[session->num_media - 1].mid, mid_value, 
@@ -297,6 +298,9 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                     char clock_rate_str[32];
                     uint32_t clock_rate;
                     int channels = 1;
+
+                    /* Skip the ':' */
+                    if (*p == ':') p++;
 
                     /* Parse payload type */
                     if (parse_int(p, &pt) == 0) {
@@ -395,9 +399,6 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                     TINYRTC_LOG_WARN("Unknown media type '%s', skipping", media_type);
                     break;
                 }
-
-                /* Skip protocol (RTP/SAVPF etc) */
-                copy_until(proto_str, sizeof(proto_str), &p, ' ');
 
                 /* Parse payload type - should be at end of line or followed by space */
                 char *end_ptr;
