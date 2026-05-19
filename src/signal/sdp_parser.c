@@ -278,6 +278,17 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                     }
                 } else if (strcmp(attr_name, "setup") == 0) {
                     copy_until(session->dtls_setup, sizeof(session->dtls_setup), &p, '\n');
+                } else if (strcmp(attr_name, "mid") == 0) {
+                    /* a=mid:<mid-value> - set mid for current media track */
+                    if (session->num_media > 0) {
+                        char mid_value[32];
+                        /* Skip the ':' (we're already past it due to copy_until(':') */
+                        copy_until(mid_value, sizeof(mid_value), &p, '\n');
+                        /* Set mid for the last added media track */
+                        strncpy(session->media[session->num_media - 1].mid, mid_value, 
+                               sizeof(session->media[session->num_media - 1].mid) - 1);
+                        session->media[session->num_media - 1].mid[sizeof(session->media[session->num_media - 1].mid) - 1] = '\0';
+                    }
                 } else if (strcmp(attr_name, "rtpmap") == 0) {
                     /* Parse rtpmap: a=rtpmap:<payload-type> <codec-name>/<clock-rate>[/<channels>] */
                     int pt;
@@ -388,9 +399,13 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                 /* Skip protocol (RTP/SAVPF etc) */
                 copy_until(proto_str, sizeof(proto_str), &p, ' ');
 
-                /* Parse payload type */
-                copy_until(payload_type_str, sizeof(payload_type_str), &p, ' ');
-                parse_int(payload_type_str, &media->payload_type);
+                /* Parse payload type - should be at end of line or followed by space */
+                char *end_ptr;
+                long pt = strtol(p, &end_ptr, 10);
+                if (end_ptr != p) {
+                    media->payload_type = (int)pt;
+                    p = end_ptr;
+                }
 
                 /* Set default codec_id based on payload type
                  * Note: will be updated later if a=rtpmap is found
