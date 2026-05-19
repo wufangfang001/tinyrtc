@@ -129,10 +129,12 @@ static void print_usage(const char *prog_name)
     printf("  --server <url>          Signaling server URL (default: ws://localhost:8080)\n");
     printf("  --no-verify             Skip SSL certificate verification (for self-signed certs)\n");
     printf("  --with-answer <file>    Use manual mode with answer from file\n");
+    printf("  --audio-codec <codec>   Audio codec: g722, pcma, pcmu (default: g722)\n");
     printf("\n");
     printf("Examples:\n");
     printf("  Automatic mode: %s --room my-room --server wss://your-server-ip:8766 --no-verify\n", prog_name);
     printf("  Manual mode:    %s --with-answer answer.sdp\n", prog_name);
+    printf("  With PCMA audio: %s --room my-room --audio-codec pcma\n", prog_name);
 }
 
 int main(int argc, char **argv)
@@ -141,6 +143,8 @@ int main(int argc, char **argv)
     bool auto_signaling = false;
     const char *default_signaling_server = "ws://localhost:8080";
     bool disable_cert_verify = false;
+    tinyrtc_codec_id_t audio_codec = TINYRTC_CODEC_G722;
+    const char *audio_codec_name = "g722";
 
     /* Parse arguments */
     for (int i = 1; i < argc; i++) {
@@ -150,6 +154,20 @@ int main(int argc, char **argv)
         }
         if (strcmp(argv[i], "--no-verify") == 0 || strcmp(argv[i], "-k") == 0) {
             disable_cert_verify = true;
+        }
+        if (strcmp(argv[i], "--audio-codec") == 0 && i + 1 < argc) {
+            audio_codec_name = argv[i+1];
+            if (strcasecmp(audio_codec_name, "g722") == 0) {
+                audio_codec = TINYRTC_CODEC_G722;
+            } else if (strcasecmp(audio_codec_name, "pcma") == 0) {
+                audio_codec = TINYRTC_CODEC_PCMA;
+            } else if (strcasecmp(audio_codec_name, "pcmu") == 0) {
+                audio_codec = TINYRTC_CODEC_PCMU;
+            } else {
+                fprintf(stderr, "Unsupported audio codec: %s. Use g722, pcma, or pcmu.\n", audio_codec_name);
+                return 1;
+            }
+            i++;
         }
     }
 
@@ -206,9 +224,10 @@ int main(int argc, char **argv)
     tinyrtc_track_config_t audio_config = {0};
     audio_config.kind = TINYRTC_TRACK_KIND_AUDIO;
     audio_config.mid = "a0";
-    audio_config.codec_id = TINYRTC_CODEC_OPUS;
+    audio_config.codec_id = audio_codec;
     /* payload_type and clock_rate auto-filled from codec defaults */
     g_audio_track = tinyrtc_peer_connection_add_track(pc, &audio_config);
+    aosl_log(AOSL_LOG_INFO, "Audio codec set to: %s\n", tinyrtc_codec_get_name(audio_codec));
 
     /* Check for manual mode with answer from previous step */
     if (!auto_signaling && argc == 3 && strcmp(argv[1], "--with-answer") == 0) {
@@ -300,19 +319,39 @@ int main(int argc, char **argv)
 
         /* Open video and audio files if they exist */
         FILE *video_file = fopen("test.264", "rb");
-        FILE *audio_file = fopen("test.opus", "rb");
         if (video_file) {
             aosl_log(AOSL_LOG_INFO, "Found test.264, will send H.264 video frames\n");
         }
+
+        /* Try to find audio file in standard locations */
+        char audio_path[512];
+        FILE *audio_file = NULL;
+
+        /* Try current directory first with codec-specific name */
+        snprintf(audio_path, sizeof(audio_path), "send_audio.%s", audio_codec_name);
+        audio_file = fopen(audio_path, "rb");
+
+        /* Try agora_rtsa_sdk directory */
+        if (!audio_file) {
+            snprintf(audio_path, sizeof(audio_path), "/home/ubuntu/agora_rtsa_sdk/example/out/x86_64/send_audio.%s", audio_codec_name);
+            audio_file = fopen(audio_path, "rb");
+        }
+
         if (audio_file) {
-            aosl_log(AOSL_LOG_INFO, "Found test.opus, will send Opus audio frames\n");
+            aosl_log(AOSL_LOG_INFO, "Found audio file: %s, will send %s audio frames\n", audio_path, tinyrtc_codec_get_name(audio_codec));
+        } else {
+            aosl_log(AOSL_LOG_WARNING, "Audio file not found: send_audio.%s\n", audio_codec_name);
         }
 
         /* Calculate timestamp increment for 30fps video */
         uint32_t video_timestamp = 0;
         uint32_t audio_timestamp = 0;
         const uint32_t video_inc = 90000 / 30;  /* 90kHz clock, 30fps */
-        const uint32_t audio_inc = 48000 / 50;  /* 48kHz clock, 50 packets/sec */
+        /* G.711/G.722 send 20ms frames */
+        /* Note: G722 actual sampling rate is 16kHz, RTP clock rate is 8kHz per RFC 3551 */
+        const uint32_t audio_clock_rate = tinyrtc_codec_get_clock_rate(audio_codec);
+        const uint32_t audio_inc = audio_clock_rate / 50;  /* 20ms = 50 packets/sec */
+        const int audio_frame_size = 160;  /* 160 bytes per 20ms frame for G711/G722 (64kbps) */
 
         /* Main loop: poll signaling and process TinyRTC events */
         int frame_count = 0;
@@ -370,16 +409,26 @@ int main(int argc, char **argv)
                 }
             }
 
-            /* TODO: send audio frames from file if available */
+            /* Send audio frames from file if available */
+            if (tinyrtc_peer_connection_get_state(pc) == TINYRTC_PC_STATE_CONNECTED &&
+                audio_file && g_audio_track) {
+                uint8_t audio_buffer[512];
+                size_t bytes_read = fread(audio_buffer, 1, audio_frame_size, audio_file);
+                if (bytes_read > 0) {
+                    tinyrtc_track_send_audio_frame(g_audio_track, audio_buffer, bytes_read, audio_timestamp);
+                    audio_timestamp += audio_inc;
+                } else {
+                    /* End of file, rewind */
+                    rewind(audio_file);
+                }
+            }
+
             tinyrtc_process_events(ctx, 100);
-            aosl_msleep(33);  /* ~30fps */
+            aosl_msleep(20);  /* 20ms interval for audio (50 fps) */
         }
 
         if (video_file) fclose(video_file);
         if (audio_file) fclose(audio_file);
-
-        tinyrtc_free(offer_sdp);
-        tinyrtc_signaling_destroy(sig);
 
         tinyrtc_free(offer_sdp);
         tinyrtc_signaling_destroy(sig);

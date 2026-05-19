@@ -225,7 +225,7 @@ int main(int argc, char **argv)
     tinyrtc_track_config_t audio_config = {0};
     audio_config.kind = TINYRTC_TRACK_KIND_AUDIO;
     audio_config.mid = "a0";
-    audio_config.codec_id = TINYRTC_CODEC_OPUS;
+    audio_config.codec_id = TINYRTC_CODEC_G722;  /* Default to G722, will negotiate during SDP exchange */
     tinyrtc_peer_connection_add_track(pc, &audio_config);
 
     if (auto_signaling) {

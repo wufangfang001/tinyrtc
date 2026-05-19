@@ -31,6 +31,7 @@ static const codec_info_t codec_info_table[] = {
     { TINYRTC_CODEC_OPUS, "OPUS", 111, 48000, 2 },
     { TINYRTC_CODEC_PCMA, "PCMA", 8, 8000, 1 },
     { TINYRTC_CODEC_PCMU, "PCMU", 0, 8000, 1 },
+    { TINYRTC_CODEC_G722, "G722", 9, 8000, 1 },
 };
 
 /* =============================================================================

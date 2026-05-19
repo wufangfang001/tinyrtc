@@ -25,6 +25,7 @@ typedef enum {
     TINYRTC_CODEC_OPUS = 100,
     TINYRTC_CODEC_PCMA = 101,
     TINYRTC_CODEC_PCMU = 102,
+    TINYRTC_CODEC_G722 = 103,
 } tinyrtc_codec_id_t;
 
 /**
