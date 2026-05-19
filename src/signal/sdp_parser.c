@@ -278,6 +278,77 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                     }
                 } else if (strcmp(attr_name, "setup") == 0) {
                     copy_until(session->dtls_setup, sizeof(session->dtls_setup), &p, '\n');
+                } else if (strcmp(attr_name, "rtpmap") == 0) {
+                    /* Parse rtpmap: a=rtpmap:<payload-type> <codec-name>/<clock-rate>[/<channels>] */
+                    int pt;
+                    char codec_info[128];
+                    char codec_name[64];
+                    char clock_rate_str[32];
+                    uint32_t clock_rate;
+                    int channels = 1;
+
+                    /* Parse payload type */
+                    if (parse_int(p, &pt) == 0) {
+                        /* Skip to space after payload type */
+                        while (*p != ' ' && *p != '\0' && *p != '\n') p++;
+                        if (*p == ' ') p++;
+
+                        /* Copy codec info (name/rate/channels) */
+                        copy_until(codec_info, sizeof(codec_info), &p, '\n');
+
+                        /* Split by / */
+                        char *slash = strchr(codec_info, '/');
+                        if (slash) {
+                            *slash = '\0';
+                            strncpy(codec_name, codec_info, sizeof(codec_name) - 1);
+                            codec_name[sizeof(codec_name) - 1] = '\0';
+
+                            /* Parse clock rate */
+                            char *rate_start = slash + 1;
+                            slash = strchr(rate_start, '/');
+                            if (slash) {
+                                *slash = '\0';
+                                strncpy(clock_rate_str, rate_start, sizeof(clock_rate_str) - 1);
+                                clock_rate_str[sizeof(clock_rate_str) - 1] = '\0';
+                                channels = atoi(slash + 1);
+                            } else {
+                                strncpy(clock_rate_str, rate_start, sizeof(clock_rate_str) - 1);
+                                clock_rate_str[sizeof(clock_rate_str) - 1] = '\0';
+                            }
+                            clock_rate = (uint32_t)atoi(clock_rate_str);
+                        } else {
+                            /* No slash, just copy codec name */
+                            strncpy(codec_name, codec_info, sizeof(codec_name) - 1);
+                            codec_name[sizeof(codec_name) - 1] = '\0';
+                            clock_rate = 0;
+                        }
+
+                        /* Find matching media track and update codec info */
+                        for (int i = 0; i < session->num_media; i++) {
+                            if (session->media[i].payload_type == pt) {
+                                /* Map codec name to codec_id */
+                                if (strcasecmp(codec_name, "H264") == 0) {
+                                    session->media[i].codec_id = TINYRTC_CODEC_H264;
+                                } else if (strcasecmp(codec_name, "OPUS") == 0) {
+                                    session->media[i].codec_id = TINYRTC_CODEC_OPUS;
+                                } else if (strcasecmp(codec_name, "PCMA") == 0) {
+                                    session->media[i].codec_id = TINYRTC_CODEC_PCMA;
+                                } else if (strcasecmp(codec_name, "PCMU") == 0) {
+                                    session->media[i].codec_id = TINYRTC_CODEC_PCMU;
+                                } else if (strcasecmp(codec_name, "G722") == 0) {
+                                    session->media[i].codec_id = TINYRTC_CODEC_G722;
+                                }
+                                if (clock_rate > 0) {
+                                    session->media[i].clock_rate = clock_rate;
+                                }
+                                session->media[i].channels = channels;
+                                TINYRTC_LOG_DEBUG("rtpmap: pt=%d codec=%s clock_rate=%u channels=%d",
+                                    pt, tinyrtc_codec_get_name(session->media[i].codec_id),
+                                    clock_rate, channels);
+                                break;
+                            }
+                        }
+                    }
                 }
                 /* Ignore other attributes for now */
                 break;
@@ -296,6 +367,7 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                 char media_type[16];
                 char port_str[16];
                 char proto_str[16];
+                char payload_type_str[16];
 
                 copy_until(media_type, sizeof(media_type), &p, ' ');
                 copy_until(port_str, sizeof(port_str), &p, ' ');
@@ -311,6 +383,38 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                     /* Unknown media type, skip */
                     TINYRTC_LOG_WARN("Unknown media type '%s', skipping", media_type);
                     break;
+                }
+
+                /* Skip protocol (RTP/SAVPF etc) */
+                copy_until(proto_str, sizeof(proto_str), &p, ' ');
+
+                /* Parse payload type */
+                copy_until(payload_type_str, sizeof(payload_type_str), &p, ' ');
+                parse_int(payload_type_str, &media->payload_type);
+
+                /* Set default codec_id based on payload type
+                 * Note: will be updated later if a=rtpmap is found
+                 */
+                if (media->payload_type == 0) {
+                    media->codec_id = TINYRTC_CODEC_PCMU;
+                    media->clock_rate = 8000;
+                    media->channels = 1;
+                } else if (media->payload_type == 8) {
+                    media->codec_id = TINYRTC_CODEC_PCMA;
+                    media->clock_rate = 8000;
+                    media->channels = 1;
+                } else if (media->payload_type == 9) {
+                    media->codec_id = TINYRTC_CODEC_G722;
+                    media->clock_rate = 8000;
+                    media->channels = 1;
+                } else if (media->payload_type == 100) {
+                    media->codec_id = TINYRTC_CODEC_H264;
+                    media->clock_rate = 90000;
+                    media->channels = 1;
+                } else if (media->payload_type == 111) {
+                    media->codec_id = TINYRTC_CODEC_OPUS;
+                    media->clock_rate = 48000;
+                    media->channels = 2;
                 }
 
                 /* Default directions */
