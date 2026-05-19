@@ -130,11 +130,14 @@ static void print_usage(const char *prog_name)
     printf("  --no-verify             Skip SSL certificate verification (for self-signed certs)\n");
     printf("  --with-answer <file>    Use manual mode with answer from file\n");
     printf("  --audio-codec <codec>   Audio codec: g722, pcma, pcmu (default: g722)\n");
+    printf("  --video-file <path>     Path to H.264 video file (default: test.264)\n");
+    printf("  --audio-file <path>     Path to audio file (default: auto-detect based on codec)\n");
     printf("\n");
     printf("Examples:\n");
     printf("  Automatic mode: %s --room my-room --server wss://your-server-ip:8766 --no-verify\n", prog_name);
     printf("  Manual mode:    %s --with-answer answer.sdp\n", prog_name);
     printf("  With PCMA audio: %s --room my-room --audio-codec pcma\n", prog_name);
+    printf("  Custom files:   %s --room my-room --video-file my_video.264 --audio-file my_audio.pcmu\n", prog_name);
 }
 
 int main(int argc, char **argv)
@@ -145,6 +148,8 @@ int main(int argc, char **argv)
     bool disable_cert_verify = false;
     tinyrtc_codec_id_t audio_codec = TINYRTC_CODEC_G722;
     const char *audio_codec_name = "g722";
+    const char *video_file_path = NULL;  /* NULL = use default test.264 */
+    const char *audio_file_path = NULL;  /* NULL = auto-detect based on codec */
 
     /* Parse arguments */
     for (int i = 1; i < argc; i++) {
@@ -154,6 +159,14 @@ int main(int argc, char **argv)
         }
         if (strcmp(argv[i], "--no-verify") == 0 || strcmp(argv[i], "-k") == 0) {
             disable_cert_verify = true;
+        }
+        if (strcmp(argv[i], "--video-file") == 0 && i + 1 < argc) {
+            video_file_path = argv[i+1];
+            i++;
+        }
+        if (strcmp(argv[i], "--audio-file") == 0 && i + 1 < argc) {
+            audio_file_path = argv[i+1];
+            i++;
         }
         if (strcmp(argv[i], "--audio-codec") == 0 && i + 1 < argc) {
             audio_codec_name = argv[i+1];
@@ -260,6 +273,63 @@ int main(int argc, char **argv)
         aosl_log(AOSL_LOG_INFO, "Starting automatic signaling... room=%s server=%s\n",
                 room_id, default_signaling_server);
 
+        /* Open video and audio files before signaling connect */
+        /* Open video file */
+        FILE *video_file = NULL;
+        if (video_file_path) {
+            video_file = fopen(video_file_path, "rb");
+            if (video_file) {
+                aosl_log(AOSL_LOG_INFO, "Using custom video file: %s\n", video_file_path);
+            } else {
+                aosl_log(AOSL_LOG_ERROR, "Failed to open video file: %s\n", video_file_path);
+            }
+        } else {
+            /* Try default video file locations */
+            video_file = fopen("test.264", "rb");
+            if (!video_file) {
+                video_file = fopen("test_data/test.264", "rb");
+            }
+            if (video_file) {
+                aosl_log(AOSL_LOG_INFO, "Found test.264, will send H.264 video frames\n");
+            }
+        }
+
+        /* Open audio file */
+        char audio_path[512];
+        FILE *audio_file = NULL;
+
+        if (audio_file_path) {
+            audio_file = fopen(audio_file_path, "rb");
+            if (audio_file) {
+                aosl_log(AOSL_LOG_INFO, "Using custom audio file: %s\n", audio_file_path);
+            } else {
+                aosl_log(AOSL_LOG_ERROR, "Failed to open audio file: %s\n", audio_file_path);
+            }
+        } else {
+            /* Try to find audio file in standard locations */
+            /* Try current directory first with codec-specific name */
+            snprintf(audio_path, sizeof(audio_path), "send_audio.%s", audio_codec_name);
+            audio_file = fopen(audio_path, "rb");
+
+            /* Try test_data directory */
+            if (!audio_file) {
+                snprintf(audio_path, sizeof(audio_path), "test_data/send_audio.%s", audio_codec_name);
+                audio_file = fopen(audio_path, "rb");
+            }
+
+            /* Try agora_rtsa_sdk directory */
+            if (!audio_file) {
+                snprintf(audio_path, sizeof(audio_path), "/home/ubuntu/agora_rtsa_sdk/example/out/x86_64/send_audio.%s", audio_codec_name);
+                audio_file = fopen(audio_path, "rb");
+            }
+
+            if (audio_file) {
+                aosl_log(AOSL_LOG_INFO, "Found audio file: %s, will send %s audio frames\n", audio_path, tinyrtc_codec_get_name(audio_codec));
+            } else {
+                aosl_log(AOSL_LOG_WARNING, "Audio file not found: send_audio.%s\n", audio_codec_name);
+            }
+        }
+
         aosl_log(AOSL_LOG_INFO, "Starting signaling connect to %s room=%s\n",
                 default_signaling_server, room_id);
 
@@ -316,32 +386,6 @@ int main(int argc, char **argv)
         aosl_log(AOSL_LOG_INFO, "Offer sent. Waiting for answer from browser...\n");
         aosl_log(AOSL_LOG_INFO, "Open browser_test.html and enter room-id: %s\n", room_id);
         aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
-
-        /* Open video and audio files if they exist */
-        FILE *video_file = fopen("test.264", "rb");
-        if (video_file) {
-            aosl_log(AOSL_LOG_INFO, "Found test.264, will send H.264 video frames\n");
-        }
-
-        /* Try to find audio file in standard locations */
-        char audio_path[512];
-        FILE *audio_file = NULL;
-
-        /* Try current directory first with codec-specific name */
-        snprintf(audio_path, sizeof(audio_path), "send_audio.%s", audio_codec_name);
-        audio_file = fopen(audio_path, "rb");
-
-        /* Try agora_rtsa_sdk directory */
-        if (!audio_file) {
-            snprintf(audio_path, sizeof(audio_path), "/home/ubuntu/agora_rtsa_sdk/example/out/x86_64/send_audio.%s", audio_codec_name);
-            audio_file = fopen(audio_path, "rb");
-        }
-
-        if (audio_file) {
-            aosl_log(AOSL_LOG_INFO, "Found audio file: %s, will send %s audio frames\n", audio_path, tinyrtc_codec_get_name(audio_codec));
-        } else {
-            aosl_log(AOSL_LOG_WARNING, "Audio file not found: send_audio.%s\n", audio_codec_name);
-        }
 
         /* Calculate timestamp increment for 30fps video */
         uint32_t video_timestamp = 0;
