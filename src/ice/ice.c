@@ -351,63 +351,42 @@ int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len)
         return 0; /* Handled as STUN */
     }
 
-    /* It's STUN response - process it */
+    /* If it's STUN Binding Response - mark connectivity check succeeded */
+    if (msg_type == STUN_BINDING_RESPONSE) {
+        TINYRTC_LOG_INFO("Received STUN Binding Response - connectivity check succeeded!");
+        /* Mark pending check pairs as succeeded (first successful pair wins) */
+        for (int i = 0; i < ice->num_check_pairs; i++) {
+            if (!ice->check_pairs[i].succeeded) {
+                ice->check_pairs[i].succeeded = true;
+                TINYRTC_LOG_INFO("Connectivity check succeeded for pair %d", i);
+            }
+        }
+    }
+
+    /* Process STUN response for mapped address (from STUN server) */
     char mapped_ip[64];
     uint16_t mapped_port;
+    mapped_ip[0] = '\0';
     tinyrtc_error_t err = stun_process_response(ice, data, len, mapped_ip, sizeof(mapped_ip), &mapped_port);
 
+    /* If we got mapped address from STUN server, add server reflexive candidate */
     if (err == TINYRTC_OK && mapped_ip[0] != '\0') {
-        /* Check if this is a connectivity check response (we got binding response)
-         * This means our connectivity check succeeded
-         */
-        if (ice->num_local_candidates > 0) {
-            /* This is a connectivity check response - we've connected */
-            /* Find the pair that this corresponds to */
-            /* For now, any successful binding means connectivity check passed */
-            for (int i = 0; i < ice->num_check_pairs; i++) {
-                if (!ice->check_pairs[i].succeeded) {
-                    ice->check_pairs[i].succeeded = true;
-                    TINYRTC_LOG_INFO("Connectivity check succeeded for pair %d", i);
-                }
-            }
-            /* Add server reflexive candidate */
-            if (ice->num_local_candidates < ICE_MAX_CANDIDATES) {
-                ice_candidate_internal_t *cand = &ice->local[ice->num_local_candidates];
-                memset(cand, 0, sizeof(*cand));
-                cand->type = ICE_CANDIDATE_TYPE_SRFLX;
-                strncpy(cand->ip, mapped_ip, sizeof(cand->ip) - 1);
-                cand->port = mapped_port;
-                strcpy(cand->protocol, "udp");
-                cand->is_ipv6 = strchr(mapped_ip, ':') != NULL;
-                cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX);
-                cand->selected = false;
-                ice->num_local_candidates++;
+        if (ice->num_local_candidates < ICE_MAX_CANDIDATES) {
+            ice_candidate_internal_t *cand = &ice->local[ice->num_local_candidates];
+            memset(cand, 0, sizeof(*cand));
+            cand->type = ICE_CANDIDATE_TYPE_SRFLX;
+            strncpy(cand->ip, mapped_ip, sizeof(cand->ip) - 1);
+            cand->port = mapped_port;
+            strcpy(cand->protocol, "udp");
+            cand->is_ipv6 = strchr(mapped_ip, ':') != NULL;
+            cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX);
+            cand->selected = false;
+            ice->num_local_candidates++;
 
-                TINYRTC_LOG_DEBUG("Added server reflexive candidate %s:%d", mapped_ip, mapped_port);
+            TINYRTC_LOG_INFO("Added server reflexive candidate %s:%d from STUN server", mapped_ip, mapped_port);
 
-                /* Notify application via callback with new candidate */
-                /* TODO: call pc->config.observer.on_ice_candidate */
-            }
-        } else {
-            /* This is our own STUN request response from STUN server - just add candidate */
-            /* Add server reflexive candidate */
-            if (ice->num_local_candidates < ICE_MAX_CANDIDATES) {
-                ice_candidate_internal_t *cand = &ice->local[ice->num_local_candidates];
-                memset(cand, 0, sizeof(*cand));
-                cand->type = ICE_CANDIDATE_TYPE_SRFLX;
-                strncpy(cand->ip, mapped_ip, sizeof(cand->ip) - 1);
-                cand->port = mapped_port;
-                strcpy(cand->protocol, "udp");
-                cand->is_ipv6 = strchr(mapped_ip, ':') != NULL;
-                cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX);
-                cand->selected = false;
-                ice->num_local_candidates++;
-
-                TINYRTC_LOG_DEBUG("Added server reflexive candidate %s:%d", mapped_ip, mapped_port);
-
-                /* Notify application via callback with new candidate */
-                /* TODO: call pc->config.observer.on_ice_candidate */
-            }
+            /* Notify application via callback with new candidate */
+            /* TODO: call pc->config.observer.on_ice_candidate */
         }
     }
 

@@ -16,6 +16,7 @@
 
 #include <sys/select.h>
 #include <sys/socket.h>
+#include <errno.h>
 #include <unistd.h>
 
 /* =============================================================================
@@ -253,8 +254,15 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
             /* Read packet */
             int len = recv(pc->ice->socket, buffer, sizeof(buffer), 0);
             if (len > 0) {
+                TINYRTC_LOG_INFO("Received UDP packet: %d bytes, first 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
+                    len,
+                    buffer[0], buffer[1], buffer[2], buffer[3],
+                    buffer[4], buffer[5], buffer[6], buffer[7]);
+
                 /* Check if this is a STUN packet or media/DTLS packet */
                 int is_stun = ice_process_packet(pc->ice, buffer, len);
+                TINYRTC_LOG_INFO("  -> STUN check result: %s", is_stun ? "NOT STUN (media/DTLS)" : "STUN packet");
+
                 if (!is_stun) {
                     if (pc->dtls != NULL && !pc->srtp_initialized) {
                         /* This is DTLS handshake data - process it */
@@ -268,7 +276,11 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
                     }
                 }
                 events_processed++;
+            } else if (len < 0) {
+                TINYRTC_LOG_ERROR("recv() failed: %s", strerror(errno));
             }
+        } else {
+            TINYRTC_LOG_DEBUG("No data ready on ICE socket fd=%d", pc->ice->socket);
         }
     }
 
