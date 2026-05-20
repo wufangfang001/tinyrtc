@@ -14,6 +14,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <errno.h>
 #include <arpa/inet.h>
 
 /* stun_header_t and constants already defined in ice_internal.h */
@@ -114,13 +115,23 @@ tinyrtc_error_t stun_send_binding_request(ice_session_t *ice,
     /* Calculate total packet size */
     size_t total_len = sizeof(stun_header_t);
 
-    /* Send to STUN server */
-    /* TODO: actual send via socket */
-    /* For now, we just build the packet */
+    /* Send to STUN server via the ICE UDP socket */
+    struct sockaddr_in stun_addr;
+    memset(&stun_addr, 0, sizeof(stun_addr));
+    stun_addr.sin_family = AF_INET;
+    inet_pton(AF_INET, server_addr, &stun_addr.sin_addr);
+    stun_addr.sin_port = htons(server_port);
 
-    TINYRTC_LOG_DEBUG("STUN binding request created to %s:%d", server_addr, server_port);
+    int sent = sendto(ice->socket, buf, total_len, 0,
+        (struct sockaddr *)&stun_addr, sizeof(stun_addr));
 
-    /* When we have the socket implemented, send here */
+    if (sent < 0) {
+        TINYRTC_LOG_ERROR("Failed to send STUN binding request: %s", strerror(errno));
+        return TINYRTC_ERROR_NETWORK;
+    }
+
+    TINYRTC_LOG_INFO("STUN binding request sent to %s:%d, %d bytes",
+        server_addr, server_port, (int)sent);
 
     return TINYRTC_OK;
 }

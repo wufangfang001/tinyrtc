@@ -127,6 +127,7 @@ static void print_usage(const char *prog_name)
     printf("  -h, --help              Show this help message\n");
     printf("  --room <room-id>        Use automatic signaling with specified room ID\n");
     printf("  --server <url>          Signaling server URL (default: ws://localhost:8080)\n");
+    printf("  --stun <url>            STUN server URL (e.g., stun:stun.l.google.com:19302)\n");
     printf("  --no-verify             Skip SSL certificate verification (for self-signed certs)\n");
     printf("  --with-answer <file>    Use manual mode with answer from file\n");
     printf("  --audio-codec <codec>   Audio codec: g722, pcma, pcmu (default: g722)\n");
@@ -145,6 +146,7 @@ int main(int argc, char **argv)
     const char *room_id = "tinyrtc-demo";
     bool auto_signaling = false;
     const char *default_signaling_server = "ws://localhost:8080";
+    const char *stun_server = "stun:stun.l.google.com:19302";  /* Default STUN server */
     bool disable_cert_verify = false;
     tinyrtc_codec_id_t audio_codec = TINYRTC_CODEC_G722;
     const char *audio_codec_name = "g722";
@@ -159,6 +161,10 @@ int main(int argc, char **argv)
         }
         if (strcmp(argv[i], "--no-verify") == 0 || strcmp(argv[i], "-k") == 0) {
             disable_cert_verify = true;
+        }
+        if (strcmp(argv[i], "--stun") == 0 && i + 1 < argc) {
+            stun_server = argv[i+1];
+            i++;
         }
         if (strcmp(argv[i], "--video-file") == 0 && i + 1 < argc) {
             video_file_path = argv[i+1];
@@ -208,7 +214,7 @@ int main(int argc, char **argv)
 
     /* Configure peer connection */
     tinyrtc_pc_config_t pc_config = {0};
-    pc_config.stun_server = NULL;  // No STUN needed for localhost testing
+    pc_config.stun_server = (char *)stun_server;  /* STUN server for NAT traversal */
     pc_config.observer.on_ice_candidate = on_ice_candidate;
     pc_config.observer.on_connection_state_change = on_connection_state_change;
     pc_config.observer.on_track_added = on_track_added;

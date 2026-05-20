@@ -226,14 +226,22 @@ tinyrtc_error_t ice_start_gathering(ice_session_t *ice, const char *stun_url)
 
     TINYRTC_LOG_INFO("Added local host candidate %s:%d", cand->ip, cand->port);
 
-    /* If STUN URL is provided, we would do server reflexive candidate gathering here */
+    /* If STUN URL is provided, send STUN binding request to get server-reflexive candidate */
     if (stun_url != NULL) {
         char stun_host[128];
         uint16_t stun_port;
-        if (!parse_stun_url(stun_url, stun_host, sizeof(stun_host), &stun_port)) {
+        if (parse_stun_url(stun_url, stun_host, sizeof(stun_host), &stun_port)) {
+            TINYRTC_LOG_INFO("Sending STUN binding request to %s:%d to get server-reflexive candidate",
+                stun_host, stun_port);
+            
+            /* Send STUN binding request via stun module */
+            tinyrtc_error_t stun_ret = stun_send_binding_request(ice, stun_host, stun_port);
+            if (stun_ret != TINYRTC_OK) {
+                TINYRTC_LOG_WARN("Failed to send STUN binding request: %d", stun_ret);
+            }
+        } else {
             TINYRTC_LOG_ERROR("Invalid STUN URL: %s", stun_url);
         }
-        /* TODO: actually send STUN request to get server-reflexive candidate */
     }
 
     ice->state = 2; /* gathered */

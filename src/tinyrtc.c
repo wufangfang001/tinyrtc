@@ -164,41 +164,15 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
     tv.tv_usec = (timeout_ms % 1000) * 1000;
 
     int ready = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
-    if (ready <= 0) {
-        /* Timeout or error, no packets ready */
-        return events_processed;
-    }
 
     /* Now process each ready socket */
     aosl_lock_lock(ctx->mutex);
 
-    uint8_t buffer[2048]; /* 2KB MTU is enough for UDP */
+    /* Always run ICE connectivity checks - even on timeout (to send STUN pings) */
     for (int i = 0; i < ctx->num_peers; i++) {
         tinyrtc_peer_connection_t *pc = ctx->peers[i];
         if (!pc || !pc->ice || pc->ice->socket < 0) {
             continue;
-        }
-
-        if (FD_ISSET(pc->ice->socket, &read_fds)) {
-            /* Read packet */
-            int len = recv(pc->ice->socket, buffer, sizeof(buffer), 0);
-            if (len > 0) {
-                /* Check if this is a STUN packet or media/DTLS packet */
-                int is_stun = ice_process_packet(pc->ice, buffer, len);
-                if (!is_stun) {
-                    if (pc->dtls != NULL && !pc->srtp_initialized) {
-                        /* This is DTLS handshake data - process it */
-                        int ret = dtls_process_data(pc->dtls, buffer, len);
-                        TINYRTC_LOG_DEBUG("Processed DTLS packet: %d", ret);
-                        events_processed++;
-                    } else {
-                        /* This is RTP media, process it */
-                        pc_process_incoming_rtp(pc, buffer, len);
-                        events_processed++;
-                    }
-                }
-                events_processed++;
-            }
         }
 
         /* Run ICE connectivity checks (send pings, handle timeouts) */
@@ -248,18 +222,52 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
                     /* We are the initiator (client) -> use client key/salt */
                     pc->srtp = srtp_init(client_key, client_salt);
                 } else {
-                    /* We are the responder (server) -> use server key/salt */
+                    /* We are the receiver (server) -> use server key/salt */
                     pc->srtp = srtp_init(server_key, server_salt);
                 }
                 if (pc->srtp != NULL) {
                     pc->srtp_initialized = true;
-                    TINYRTC_LOG_INFO("DTLS handshake complete, SRTP initialized successfully");
-                    TINYRTC_LOG_INFO("TinyRTC: PeerConnection FULLY CONNECTED! Ready for media transport");
+                    TINYRTC_LOG_INFO("SRTP initialized successfully, media encryption ready");
                     fflush(stdout);
                 } else {
-                    TINYRTC_LOG_ERROR("Failed to initialize SRTP after DTLS");
-                    fflush(stdout);
+                    TINYRTC_LOG_ERROR("Failed to initialize SRTP");
                 }
+            }
+        }
+    }
+
+    if (ready <= 0) {
+        /* Timeout or error, no packets ready but ICE checks ran */
+        aosl_lock_unlock(ctx->mutex);
+        return events_processed;
+    }
+
+    uint8_t buffer[2048]; /* 2KB MTU is enough for UDP */
+    for (int i = 0; i < ctx->num_peers; i++) {
+        tinyrtc_peer_connection_t *pc = ctx->peers[i];
+        if (!pc || !pc->ice || pc->ice->socket < 0) {
+            continue;
+        }
+
+        if (FD_ISSET(pc->ice->socket, &read_fds)) {
+            /* Read packet */
+            int len = recv(pc->ice->socket, buffer, sizeof(buffer), 0);
+            if (len > 0) {
+                /* Check if this is a STUN packet or media/DTLS packet */
+                int is_stun = ice_process_packet(pc->ice, buffer, len);
+                if (!is_stun) {
+                    if (pc->dtls != NULL && !pc->srtp_initialized) {
+                        /* This is DTLS handshake data - process it */
+                        int ret = dtls_process_data(pc->dtls, buffer, len);
+                        TINYRTC_LOG_DEBUG("Processed DTLS packet: %d", ret);
+                        events_processed++;
+                    } else {
+                        /* This is RTP media, process it */
+                        pc_process_incoming_rtp(pc, buffer, len);
+                        events_processed++;
+                    }
+                }
+                events_processed++;
             }
         }
     }
