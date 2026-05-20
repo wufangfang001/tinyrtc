@@ -11,6 +11,7 @@
 
 #include "common.h"
 #include "ice_internal.h"
+#include "peer_connection_internal.h"
 #include "tinyrtc/peer_connection.h"
 
 #include <stdio.h>
@@ -444,7 +445,6 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             stun_header_t *hdr = (stun_header_t *)buffer;
             memset(buffer, 0, sizeof(buffer));
             stun_write16((uint8_t *)&hdr->type, STUN_BINDING_REQUEST);
-            stun_write16((uint8_t *)&hdr->length, 0);
             stun_write32((uint8_t *)&hdr->magic_cookie, STUN_MAGIC_COOKIE);
 
             /* Generate random transaction ID using current time */
@@ -464,7 +464,73 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             hdr->transaction_id[11] = (extra >> 32) & 0xFF;
 
             len = sizeof(stun_header_t);
-            hdr->length = htons(0);
+
+            /* ======================================================================
+             * Add USERNAME attribute (required by ICE RFC 8445)
+             * Format: local_ufrag:remote_ufrag
+             * ====================================================================== */
+            char username[256];
+            snprintf(username, sizeof(username), "%s:%s",
+                ice->pc->local_sdp.ice_ufrag,
+                ice->pc->remote_sdp.ice_ufrag);
+            size_t username_len = strlen(username);
+
+            /* Attribute header: type (2 bytes) + length (2 bytes) */
+            uint16_t attr_type = htons(0x0006);  /* STUN_ATTR_USERNAME */
+            uint16_t attr_len = htons((uint16_t)username_len);
+
+            memcpy(buffer + len, &attr_type, 2);
+            len += 2;
+            memcpy(buffer + len, &attr_len, 2);
+            len += 2;
+
+            /* Attribute value */
+            memcpy(buffer + len, username, username_len);
+            len += username_len;
+
+            /* Padding to 4-byte boundary */
+            size_t padding = (4 - (username_len % 4)) % 4;
+            if (padding > 0) {
+                memset(buffer + len, 0, padding);
+                len += padding;
+            }
+
+            /* ======================================================================
+             * Add ICE-CONTROLLING attribute (we are the initiator)
+             * ====================================================================== */
+            uint64_t tie_breaker = now_stun;
+            attr_type = htons(0x802A);  /* STUN_ATTR_ICE_CONTROLLING */
+            attr_len = htons(8);
+
+            memcpy(buffer + len, &attr_type, 2);
+            len += 2;
+            memcpy(buffer + len, &attr_len, 2);
+            len += 2;
+
+            /* Write 64-bit tie-breaker value (network byte order) */
+            for (int i = 0; i < 8; i++) {
+                buffer[len + i] = (tie_breaker >> (56 - 8 * i)) & 0xFF;
+            }
+            len += 8;
+
+            /* ======================================================================
+             * Add PRIORITY attribute
+             * ====================================================================== */
+            attr_type = htons(0x0024);  /* STUN_ATTR_PRIORITY */
+            attr_len = htons(4);
+            uint32_t priority = htonl(pair->local->priority);
+
+            memcpy(buffer + len, &attr_type, 2);
+            len += 2;
+            memcpy(buffer + len, &attr_len, 2);
+            len += 2;
+            memcpy(buffer + len, &priority, 4);
+            len += 4;
+
+            /* Set STUN message length (excluding header) */
+            hdr->length = htons((uint16_t)(len - sizeof(stun_header_t)));
+
+            TINYRTC_LOG_INFO("  STUN username: %s", username);
 
             /* Send to remote candidate via our UDP socket */
             int sent = sendto(ice->socket, buffer, len, 0,

@@ -169,80 +169,6 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
     /* Now process each ready socket */
     aosl_lock_lock(ctx->mutex);
 
-    /* Always run ICE connectivity checks - even on timeout (to send STUN pings) */
-    for (int i = 0; i < ctx->num_peers; i++) {
-        tinyrtc_peer_connection_t *pc = ctx->peers[i];
-        if (!pc || !pc->ice || pc->ice->socket < 0) {
-            continue;
-        }
-
-        /* Run ICE connectivity checks (send pings, handle timeouts) */
-        ice_check_connectivity(pc->ice, now);
-
-        /* Check if ICE connected and notify state change */
-        bool was_connected = pc->state == TINYRTC_PC_STATE_CONNECTED;
-        bool is_connected = ice_is_connected(pc->ice);
-        TINYRTC_LOG_INFO("Peer %p: ICE check done, connected=%d was_connected=%d", pc, is_connected, was_connected);
-        if (!was_connected && is_connected) {
-            pc->state = TINYRTC_PC_STATE_CONNECTED;
-            /* Start DTLS handshake now that ICE is connected */
-            if (pc->dtls == NULL) {
-                dtls_role_t role = pc->config.is_initiator ? DTLS_ROLE_CLIENT : DTLS_ROLE_SERVER;
-                pc->dtls = dtls_init(role);
-                if (pc->dtls != NULL) {
-                    dtls_start(pc->dtls, pc->ice->socket);
-                    TINYRTC_LOG_INFO("DTLS handshake started (role=%s)",
-                        role == DTLS_ROLE_CLIENT ? "client" : "server");
-                } else {
-                    TINYRTC_LOG_ERROR("Failed to initialize DTLS");
-                }
-            }
-            if (pc->config.observer.on_connection_state_change) {
-                pc->config.observer.on_connection_state_change(
-                    pc->config.observer.user_data,
-                    pc->state);
-            }
-            TINYRTC_LOG_INFO("ICE connected successfully, starting DTLS handshake (initiator=%d)", pc->config.is_initiator);
-            fflush(stdout);
-        }
-
-        /* Process DTLS if DTLS is started */
-        if (pc->dtls != NULL && !pc->srtp_initialized) {
-            int dtls_done = dtls_is_handshake_complete(pc->dtls);
-            TINYRTC_LOG_DEBUG("Peer %p: DTLS handshake check done, complete=%d", pc, dtls_done);
-            if (dtls_done) {
-                /* DTLS done, extract keys and initialize SRTP */
-                unsigned char master_secret[48];
-                unsigned char client_key[16];
-                unsigned char server_key[16];
-                unsigned char client_salt[14];
-                unsigned char server_salt[14];
-                TINYRTC_LOG_DEBUG("Deriving SRTP keys");
-                dtls_derive_srtp_keys(pc->dtls, client_key, client_salt, server_key, server_salt);
-                if (pc->config.is_initiator) {
-                    /* We are the initiator (client) -> use client key/salt */
-                    pc->srtp = srtp_init(client_key, client_salt);
-                } else {
-                    /* We are the receiver (server) -> use server key/salt */
-                    pc->srtp = srtp_init(server_key, server_salt);
-                }
-                if (pc->srtp != NULL) {
-                    pc->srtp_initialized = true;
-                    TINYRTC_LOG_INFO("SRTP initialized successfully, media encryption ready");
-                    fflush(stdout);
-                } else {
-                    TINYRTC_LOG_ERROR("Failed to initialize SRTP");
-                }
-            }
-        }
-    }
-
-    if (ready <= 0) {
-        /* Timeout or error, no packets ready but ICE checks ran */
-        aosl_lock_unlock(ctx->mutex);
-        return events_processed;
-    }
-
     uint8_t buffer[2048]; /* 2KB MTU is enough for UDP */
     for (int i = 0; i < ctx->num_peers; i++) {
         tinyrtc_peer_connection_t *pc = ctx->peers[i];
@@ -250,6 +176,7 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
             continue;
         }
 
+        /* Check for incoming UDP packets first */
         if (FD_ISSET(pc->ice->socket, &read_fds)) {
             /* Read packet */
             int len = recv(pc->ice->socket, buffer, sizeof(buffer), 0);
