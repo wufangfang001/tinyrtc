@@ -186,11 +186,12 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
                     buffer[0], buffer[1], buffer[2], buffer[3],
                     buffer[4], buffer[5], buffer[6], buffer[7]);
 
-                /* Check if this is a STUN packet or media/DTLS packet */
-                int is_stun = ice_process_packet(pc->ice, buffer, len);
-                TINYRTC_LOG_INFO("  -> STUN check result: %s", is_stun ? "NOT STUN (media/DTLS)" : "STUN packet");
+                /* ice_process_packet returns: 0 = STUN packet (handled), 1 = not STUN (media/DTLS) */
+                int is_media = ice_process_packet(pc->ice, buffer, len);
+                TINYRTC_LOG_INFO("  -> packet classification: %s", is_media ? "media/DTLS" : "STUN (handled by ICE)");
 
-                if (!is_stun) {
+                if (is_media) {
+                    /* This is media/DTLS packet (not STUN) */
                     if (pc->dtls != NULL && !pc->srtp_initialized) {
                         /* This is DTLS handshake data - process it */
                         int ret = dtls_process_data(pc->dtls, buffer, len);

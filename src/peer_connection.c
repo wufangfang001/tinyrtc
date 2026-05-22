@@ -403,7 +403,10 @@ tinyrtc_error_t tinyrtc_peer_connection_set_remote_description(
         return err;
     }
 
-    TINYRTC_LOG_DEBUG("Remote description set: %d media tracks", pc->remote_sdp.num_media);
+    TINYRTC_LOG_INFO("Remote description set: %d media tracks", pc->remote_sdp.num_media);
+    TINYRTC_LOG_INFO("  remote ice_ufrag: '%s', ice_pwd: '%s'", 
+        pc->remote_sdp.ice_ufrag[0] ? pc->remote_sdp.ice_ufrag : "(empty)",
+        pc->remote_sdp.ice_pwd[0] ? pc->remote_sdp.ice_pwd : "(empty)");
 
     /* Process remote media - add remote tracks */
     for (int i = 0; i < pc->remote_sdp.num_media; i++) {

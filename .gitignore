@@ -32,3 +32,7 @@ docs/memory/*.md
 !docs/memory/BUGS.md
 !docs/memory/.gitkeep
 build*
+
+# Local debug tools
+udp_test
+udp_test.c
