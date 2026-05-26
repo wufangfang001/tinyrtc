@@ -153,6 +153,36 @@ MINUNIT_TEST(test_signaling_parse_peer_joined_event)
     return 0;
 }
 
+MINUNIT_TEST(test_signaling_tls_client_config_defaults)
+{
+    struct tinyrtc_signaling sig;
+    int ret;
+
+    memset(&sig, 0, sizeof(sig));
+    mbedtls_entropy_init(&sig.entropy);
+    mbedtls_ctr_drbg_init(&sig.ctr_drbg);
+    mbedtls_ssl_config_init(&sig.conf);
+
+    ret = mbedtls_ctr_drbg_seed(&sig.ctr_drbg, mbedtls_entropy_func,
+                                &sig.entropy,
+                                (const unsigned char *)"tinyrtc-test",
+                                strlen("tinyrtc-test"));
+    MINUNIT_ASSERT(ret == 0, "Expected CTR-DRBG seed to succeed");
+
+    ret = sig_configure_tls_client(&sig, false, false);
+    MINUNIT_ASSERT(ret == 0, "Expected TLS client configuration helper to succeed");
+    MINUNIT_ASSERT(sig.conf.endpoint == MBEDTLS_SSL_IS_CLIENT,
+                   "Expected TLS config endpoint to be client");
+    MINUNIT_ASSERT(sig.conf.transport == MBEDTLS_SSL_TRANSPORT_STREAM,
+                   "Expected TLS config transport to be stream");
+
+    mbedtls_ssl_config_free(&sig.conf);
+    mbedtls_ctr_drbg_free(&sig.ctr_drbg);
+    mbedtls_entropy_free(&sig.entropy);
+
+    return 0;
+}
+
 MINUNIT_TEST(test_peer_connection_create_answer_adds_remote_candidates_to_ice)
 {
     tinyrtc_context_t ctx;

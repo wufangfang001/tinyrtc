@@ -94,6 +94,9 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
 static int sig_read_ws_frame(struct tinyrtc_signaling *sig);
 static int sig_send_ws_frame(struct tinyrtc_signaling *sig, uint8_t opcode,
                               const uint8_t *data, size_t len);
+static int sig_configure_tls_client(struct tinyrtc_signaling *sig,
+                                    bool ca_loaded,
+                                    bool verify_disabled);
 static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *data, size_t len);
 static char *sig_extract_json_string_field(const char *json, const char *field_name);
 static char *sig_extract_sdp_value(const char *json);
@@ -873,6 +876,27 @@ static int sig_send_ws_frame(struct tinyrtc_signaling *sig, uint8_t opcode,
     return 0;
 }
 
+static int sig_configure_tls_client(struct tinyrtc_signaling *sig,
+                                    bool ca_loaded,
+                                    bool verify_disabled)
+{
+    int ret = mbedtls_ssl_config_defaults(&sig->conf,
+                                          MBEDTLS_SSL_IS_CLIENT,
+                                          MBEDTLS_SSL_TRANSPORT_STREAM,
+                                          MBEDTLS_SSL_PRESET_DEFAULT);
+    if (ret != 0) {
+        return ret;
+    }
+
+    mbedtls_ssl_conf_authmode(&sig->conf,
+                              (ca_loaded && !verify_disabled) ? MBEDTLS_SSL_VERIFY_REQUIRED
+                                : MBEDTLS_SSL_VERIFY_NONE);
+    mbedtls_ssl_conf_ca_chain(&sig->conf, &sig->cacert, NULL);
+    mbedtls_ssl_conf_rng(&sig->conf, mbedtls_ctr_drbg_random, &sig->ctr_drbg);
+
+    return 0;
+}
+
 /* Process incoming text message - parse JSON and invoke callback */
 static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *data, size_t len) {
     aosl_log(AOSL_LOG_DEBUG, "sig_process_message: received message, len=%zu\n", len);
@@ -1161,12 +1185,13 @@ tinyrtc_signaling_t *tinyrtc_signaling_create(
     if (sig->is_wss) {
         /* Setup SSL */
         bool verify_disabled = sig->disable_cert_verify;
-        mbedtls_ssl_conf_authmode(&sig->conf,
-                                  (ca_loaded && !verify_disabled) ? MBEDTLS_SSL_VERIFY_REQUIRED
-                                            : MBEDTLS_SSL_VERIFY_NONE);
-        mbedtls_ssl_conf_ca_chain(&sig->conf, &sig->cacert, NULL);
-        mbedtls_ssl_conf_rng(&sig->conf, mbedtls_ctr_drbg_random,
-                              &sig->ctr_drbg);
+        ret = sig_configure_tls_client(sig, ca_loaded, verify_disabled);
+        if (ret != 0) {
+            snprintf(sig->last_error, sizeof(sig->last_error) - 1,
+                     "mbedtls_ssl_config_defaults failed: -0x%04x", -ret);
+            sig->state = TINYRTC_SIGNALING_ERROR;
+            goto error;
+        }
 
         ret = mbedtls_ssl_setup(&sig->ssl, &sig->conf);
         if (ret != 0) {

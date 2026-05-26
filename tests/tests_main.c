@@ -20,6 +20,7 @@ extern int test_signaling_parse_object_sdp_offer(void);
 extern int test_signaling_parse_object_ice_candidate(void);
 extern int test_signaling_parse_string_ice_candidate(void);
 extern int test_signaling_parse_peer_joined_event(void);
+extern int test_signaling_tls_client_config_defaults(void);
 extern int test_peer_connection_create_answer_adds_remote_candidates_to_ice(void);
 
 int main(void) {
@@ -34,6 +35,7 @@ int main(void) {
     MINUNIT_RUN_TEST(test_signaling_parse_object_ice_candidate);
     MINUNIT_RUN_TEST(test_signaling_parse_string_ice_candidate);
     MINUNIT_RUN_TEST(test_signaling_parse_peer_joined_event);
+    MINUNIT_RUN_TEST(test_signaling_tls_client_config_defaults);
     MINUNIT_RUN_TEST(test_peer_connection_create_answer_adds_remote_candidates_to_ice);
 
     MINUNIT_SUMMARY();
