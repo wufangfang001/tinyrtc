@@ -215,7 +215,7 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
         }
         p++;
 
-        TINYRTC_LOG_INFO("SDP parsing line %d type '%c'", line_num, type);
+        TINYRTC_LOG_DEBUG("SDP parsing line %d type '%c'", line_num, type);
 
         switch (type) {
             case 'v': /* Version */

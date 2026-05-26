@@ -415,7 +415,7 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
 
     /* Send connectivity check pings to all unchecked pairs */
     TINYRTC_LOG_DEBUG("ice_check_connectivity: num_check_pairs=%d state=%d", ice->num_check_pairs, ice->state);
-    TINYRTC_LOG_INFO("ice_check_connectivity: starting iteration over %d check pairs, state=%d",
+    TINYRTC_LOG_DEBUG("ice_check_connectivity: starting iteration over %d check pairs, state=%d",
         ice->num_check_pairs, ice->state);
     int sent_this_tick = 0;
     for (int i = 0; i < ice->num_check_pairs; i++) {
@@ -423,7 +423,7 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
         TINYRTC_LOG_DEBUG("Check pair %d: succeeded=%d last_ping_ms=%lu now=%lu timeout=%lu",
             i, pair->succeeded, (unsigned long)pair->last_ping_ms, (unsigned long)now,
             (unsigned long)(ICE_STUN_TIMEOUT_MS * ICE_MAX_RETRIES));
-        TINYRTC_LOG_INFO("Check pair %d: succeeded=%d last_ping_ms=%lu -> condition=%d",
+        TINYRTC_LOG_DEBUG("Check pair %d: succeeded=%d last_ping_ms=%lu -> condition=%d",
             i, pair->succeeded, (unsigned long)pair->last_ping_ms,
             (int)(!pair->succeeded && (pair->last_ping_ms == 0 || (now - pair->last_ping_ms) > (uint64_t)(ICE_STUN_TIMEOUT_MS * ICE_MAX_RETRIES))));
         if (!pair->succeeded && (pair->last_ping_ms == 0 ||
@@ -530,13 +530,13 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             /* Set STUN message length (excluding header) */
             hdr->length = htons((uint16_t)(len - sizeof(stun_header_t)));
 
-            TINYRTC_LOG_INFO("  STUN username: %s", username);
+            TINYRTC_LOG_DEBUG("  STUN username: %s", username);
 
             /* Send to remote candidate via our UDP socket */
             int sent = sendto(ice->socket, buffer, len, 0,
                 (struct sockaddr *)&remote_addr, sizeof(remote_addr));
 
-            TINYRTC_LOG_INFO("Sending STUN connectivity check: local=%s:%d remote=%s:%d, sent %d bytes",
+            TINYRTC_LOG_DEBUG("Sending STUN connectivity check: local=%s:%d remote=%s:%d, sent %d bytes",
                 pair->local->ip, pair->local->port,
                 pair->remote->ip, pair->remote->port, (int)sent);
             fflush(stdout);

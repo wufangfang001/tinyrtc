@@ -181,14 +181,14 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
             /* Read packet */
             int len = recv(pc->ice->socket, buffer, sizeof(buffer), 0);
             if (len > 0) {
-                TINYRTC_LOG_INFO("Received UDP packet: %d bytes, first 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
+                TINYRTC_LOG_DEBUG("Received UDP packet: %d bytes, first 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
                     len,
                     buffer[0], buffer[1], buffer[2], buffer[3],
                     buffer[4], buffer[5], buffer[6], buffer[7]);
 
                 /* ice_process_packet returns: 0 = STUN packet (handled), 1 = not STUN (media/DTLS) */
                 int is_media = ice_process_packet(pc->ice, buffer, len);
-                TINYRTC_LOG_INFO("  -> packet classification: %s", is_media ? "media/DTLS" : "STUN (handled by ICE)");
+                TINYRTC_LOG_DEBUG("  -> packet classification: %s", is_media ? "media/DTLS" : "STUN (handled by ICE)");
 
                 if (is_media) {
                     /* This is media/DTLS packet (not STUN) */
@@ -217,7 +217,7 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
         /* Check if ICE connected and notify state change */
         bool was_connected = pc->state == TINYRTC_PC_STATE_CONNECTED;
         bool is_connected = ice_is_connected(pc->ice);
-        TINYRTC_LOG_INFO("Peer %p: ICE check done, connected=%d was_connected=%d", pc, is_connected, was_connected);
+        TINYRTC_LOG_DEBUG("Peer %p: ICE check done, connected=%d was_connected=%d", pc, is_connected, was_connected);
         if (!was_connected && is_connected) {
             pc->state = TINYRTC_PC_STATE_CONNECTED;
             /* Start DTLS handshake now that ICE is connected */
