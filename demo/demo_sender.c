@@ -4,11 +4,11 @@
  *
  * Usage with automatic signaling:
  *   ./tinyrtc_send --room <room-id>
- *   Then open browser_test.html with same room-id and it will connect automatically
+ *   Then open the sdp-transfer browser demo with the same room-id and it will connect automatically
  *
  * Usage with manual signaling (original):
  * 1. Run ./tinyrtc_send to generate offer
- * 2. Copy generated offer.sdp to browser test page
+ * 2. Copy generated offer.sdp to your browser-side WebRTC SDP tool
  * 3. Copy browser answer to answer.sdp
  * 4. Run ./tinyrtc_send --with-answer answer.sdp
  *
@@ -81,6 +81,8 @@ static void on_video_frame(void *user_data, tinyrtc_track_t *track,
 /* Global for signaling callback */
 static tinyrtc_peer_connection_t *g_pc = NULL;
 static bool g_got_answer = false;
+static bool g_peer_joined = false;
+static bool g_offer_sent = false;
 static tinyrtc_track_t *g_video_track = NULL;
 static tinyrtc_track_t *g_audio_track = NULL;
 
@@ -102,6 +104,10 @@ static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
                 }
                 // NOTE: sig_process_message already frees event->data.answer after callback, don't free again!
             }
+            break;
+        case TINYRTC_SIGNAL_EVENT_PEER_JOIN:
+            aosl_log(AOSL_LOG_INFO, "Peer joined room, ready to send offer\n");
+            g_peer_joined = true;
             break;
         case TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE:
             aosl_log(AOSL_LOG_DEBUG, "Received ICE candidate from signaling\n");
@@ -126,7 +132,7 @@ static void print_usage(const char *prog_name)
     printf("Options:\n");
     printf("  -h, --help              Show this help message\n");
     printf("  --room <room-id>        Use automatic signaling with specified room ID\n");
-    printf("  --server <url>          Signaling server URL (default: ws://localhost:8080)\n");
+    printf("  --server <url>          Signaling server URL (default: ws://localhost:8765)\n");
     printf("  --stun <url>            STUN server URL (e.g., stun:stun.l.google.com:19302)\n");
     printf("  --no-verify             Skip SSL certificate verification (for self-signed certs)\n");
     printf("  --with-answer <file>    Use manual mode with answer from file\n");
@@ -145,7 +151,7 @@ int main(int argc, char **argv)
 {
     const char *room_id = "tinyrtc-demo";
     bool auto_signaling = false;
-    const char *default_signaling_server = "ws://localhost:8080";
+    const char *default_signaling_server = "ws://localhost:8765";
     const char *stun_server = "stun:stun.l.google.com:19302";  /* Default STUN server */
     bool disable_cert_verify = false;
     tinyrtc_codec_id_t audio_codec = TINYRTC_CODEC_G722;
@@ -194,7 +200,7 @@ int main(int argc, char **argv)
         room_id = argv[2];
         auto_signaling = true;
     }
-    /* Usage: ./tinyrtc_send --room room-id --server ws://your-server-ip:8080 */
+    /* Usage: ./tinyrtc_send --room room-id --server ws://your-server-ip:8765 */
     for (int i = 1; i < argc - 1; i++) {
         if (strcmp(argv[i], "--server") == 0) {
             default_signaling_server = argv[i+1];
@@ -230,6 +236,8 @@ int main(int argc, char **argv)
     }
 
     g_pc = pc;
+    g_peer_joined = false;
+    g_offer_sent = false;
 
     /* Add video track (we send video) */
     tinyrtc_track_config_t video_config = {0};
@@ -275,7 +283,7 @@ int main(int argc, char **argv)
             aosl_msleep(10);
         }
     } else if (auto_signaling) {
-        /* Automatic signaling using public signaling server */
+        /* Automatic signaling using external sdp-transfer server */
         aosl_log(AOSL_LOG_INFO, "Starting automatic signaling... room=%s server=%s\n",
                 room_id, default_signaling_server);
 
@@ -364,33 +372,8 @@ int main(int argc, char **argv)
         }
 
         aosl_log(AOSL_LOG_INFO, "Connected to signaling server successfully\n");
-
-        /* Create offer and send via signaling */
+        aosl_log(AOSL_LOG_INFO, "Waiting for peer to join before creating offer...\n");
         char *offer_sdp = NULL;
-        err = tinyrtc_peer_connection_create_offer(pc, &offer_sdp);
-        if (err != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to create offer: %s\n", tinyrtc_get_error_string(err));
-            tinyrtc_signaling_destroy(sig);
-            goto cleanup;
-        }
-
-        /* Debug: print the actual SDP */
-        aosl_log(AOSL_LOG_INFO, "\n--- Generated SDP Offer (%zu bytes) ---\n", strlen(offer_sdp));
-        aosl_log(AOSL_LOG_INFO, "%s", offer_sdp);
-        aosl_log(AOSL_LOG_INFO, "--- End of SDP Offer ---\n\n");
-
-        aosl_log(AOSL_LOG_INFO, "Created offer, sending to signaling server...\n");
-        err = tinyrtc_signaling_send_offer(sig, NULL, offer_sdp);
-        if (err != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to send offer: %s\n",
-                    tinyrtc_get_error_string(err));
-            tinyrtc_free(offer_sdp);
-            tinyrtc_signaling_destroy(sig);
-            goto cleanup;
-        }
-
-        aosl_log(AOSL_LOG_INFO, "Offer sent. Waiting for answer from browser...\n");
-        aosl_log(AOSL_LOG_INFO, "Open browser_test.html and enter room-id: %s\n", room_id);
         aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
 
         /* Calculate timestamp increment for 30fps video */
@@ -409,6 +392,32 @@ int main(int argc, char **argv)
             /* Process signaling messages */
             tinyrtc_process_events(ctx, 100);
             tinyrtc_signaling_process(sig);
+
+            if (!g_offer_sent && g_peer_joined) {
+                err = tinyrtc_peer_connection_create_offer(pc, &offer_sdp);
+                if (err != TINYRTC_OK) {
+                    aosl_log(AOSL_LOG_ERROR, "Failed to create offer: %s\n", tinyrtc_get_error_string(err));
+                    tinyrtc_signaling_destroy(sig);
+                    goto cleanup;
+                }
+
+                aosl_log(AOSL_LOG_INFO, "\n--- Generated SDP Offer (%zu bytes) ---\n", strlen(offer_sdp));
+                aosl_log(AOSL_LOG_INFO, "%s", offer_sdp);
+                aosl_log(AOSL_LOG_INFO, "--- End of SDP Offer ---\n\n");
+
+                aosl_log(AOSL_LOG_INFO, "Created offer, sending to signaling server...\n");
+                err = tinyrtc_signaling_send_offer(sig, NULL, offer_sdp);
+                if (err != TINYRTC_OK) {
+                    aosl_log(AOSL_LOG_ERROR, "Failed to send offer: %s\n",
+                            tinyrtc_get_error_string(err));
+                    tinyrtc_free(offer_sdp);
+                    tinyrtc_signaling_destroy(sig);
+                    goto cleanup;
+                }
+
+                g_offer_sent = true;
+                aosl_log(AOSL_LOG_INFO, "Offer sent. Waiting for answer...\n");
+            }
 
             /* If connected and we have a video file, send next NAL unit (frame) */
             if (tinyrtc_peer_connection_get_state(pc) == TINYRTC_PC_STATE_CONNECTED &&
@@ -480,7 +489,9 @@ int main(int argc, char **argv)
         if (video_file) fclose(video_file);
         if (audio_file) fclose(audio_file);
 
-        tinyrtc_free(offer_sdp);
+        if (offer_sdp) {
+            tinyrtc_free(offer_sdp);
+        }
         tinyrtc_signaling_destroy(sig);
     } else {
         /* Manual mode: Create offer and write to file */
@@ -500,13 +511,13 @@ int main(int argc, char **argv)
 
         aosl_log(AOSL_LOG_INFO, "Offer generated and saved to offer.sdp\n");
         aosl_log(AOSL_LOG_INFO, "Next step (manual mode):\n");
-        aosl_log(AOSL_LOG_INFO, "  1. Open tools/browser_test.html in your browser\n");
+        aosl_log(AOSL_LOG_INFO, "  1. Open your browser-side WebRTC SDP tool or the sdp-transfer demo\n");
         aosl_log(AOSL_LOG_INFO, "  2. Paste offer.sdp content into browser\n");
         aosl_log(AOSL_LOG_INFO, "  3. Copy the generated answer from browser to answer.sdp\n");
         aosl_log(AOSL_LOG_INFO, "  4. Run: %s --with-answer answer.sdp\n", argv[0]);
         aosl_log(AOSL_LOG_INFO, "\n");
         aosl_log(AOSL_LOG_INFO, "Or use automatic mode:\n");
-        aosl_log(AOSL_LOG_INFO, "  %s --room %s  (connects via public signaling server)\n", argv[0], room_id);
+        aosl_log(AOSL_LOG_INFO, "  %s --room %s  (connects via configured signaling server)\n", argv[0], room_id);
         tinyrtc_free(offer_sdp);
     }
 

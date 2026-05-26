@@ -42,7 +42,6 @@ tinyrtc/
 │   ├── cc/            # Congestion control
 │   └── tinyrtc.c      # Core SDK
 ├── demo/              # Example applications
-├── tools/             # Testing utilities (browser test page)
 ├── platform/          # Platform-specific code (if needed)
 ├── third_party/
 │   └── aosl/         # AOSL platform abstraction (git submodule)

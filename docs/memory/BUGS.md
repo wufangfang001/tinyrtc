@@ -1,5 +1,40 @@
 # Known Bugs and Fixes
 
+## 自动信令文档仍引用旧服务
+
+**问题描述**：README、信令文档和默认说明仍引用 `signal-master`、`wsnodejs.nodejitsu.com` 或 `sdp-transfer`，容易让后续联调连错服务。
+
+**根本原因**：
+- TinyRTC 已经转向第三方 `sdp-transfer` 工程作为当前自动信令基线
+- 但仓库内记忆和说明文档没有同步更新，仍保留历史公网/旧工程表述
+
+**修复方案**：
+1. README 和 `docs/signaling.md` 统一改为 `sdp-transfer`
+2. demo 和浏览器测试页默认地址统一改为 `ws://localhost:8765`
+3. 在 architecture/memory 里明确标注旧公网和 `sdp-transfer` 引用已过时
+
+**状态**：✅ 已修复
+
+---
+
+## sdp-transfer 浏览器 Demo 与 TinyRTC 信令解析不完全兼容
+
+**问题描述**：即使信令后端已经统一为 `sdp-transfer`，其自带浏览器 Demo 仍不应被视为 TinyRTC 当前版本的“必然可互通”基线。
+
+**根本原因**：
+- `sdp-transfer` 服务端转发的是扁平 JSON 消息壳
+- 但其浏览器 Demo 实际发送 `RTCSessionDescription` / `RTCIceCandidate` 对象
+- TinyRTC 当前信令实现主要按字符串 SDP 解析，远端 ICE candidate 对象也未完整处理
+
+**修复方案**：
+1. 在 README、`docs/signaling.md` 和源码注释中显式记录这一限制
+2. 将手工 SDP 交换保留为更可靠的调试基线
+3. 后续如要打通 `sdp-transfer` 自带 browser demo，需要补齐对象形态解析和完整 ICE candidate 处理
+
+**状态**：✅ 已记录，待代码层修复
+
+---
+
 ## WebSocket Sec-WebSocket-Accept 验证失败
 
 **问题描述**：tinyrtc客户端连接信令服务器时，总是报 `Invalid Sec-WebSocket-Accept` 错误，握手失败。

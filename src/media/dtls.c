@@ -188,13 +188,38 @@ dtls_context_t *dtls_init(dtls_role_t role)
 
     /* Generate self-signed certificate */
     mbedtls_x509write_cert crtwrite;
+    mbedtls_mpi serial;
     mbedtls_x509write_crt_init(&crtwrite);
+    mbedtls_mpi_init(&serial);
+
+    /* Attach generated EC key to the PK container before using it for
+     * certificate generation and DTLS certificate configuration. */
+    *mbedtls_pk_ec(*pkey) = *ec_key;
+    tinyrtc_internal_free(ec_key);
+    ec_key = NULL;
 
     /* Set certificate information */
     mbedtls_x509write_crt_set_subject_name(&crtwrite, "CN=TinyRTC");
     mbedtls_x509write_crt_set_issuer_name(&crtwrite, "CN=TinyRTC");
     mbedtls_x509write_crt_set_md_alg(&crtwrite, MBEDTLS_MD_SHA256);
     mbedtls_x509write_crt_set_subject_key(&crtwrite, pkey);
+    mbedtls_x509write_crt_set_issuer_key(&crtwrite, pkey);
+    mbedtls_x509write_crt_set_version(&crtwrite, MBEDTLS_X509_CRT_VERSION_3);
+
+    ret = mbedtls_mpi_read_string(&serial, 10, "1");
+    if (ret != 0) {
+        TINYRTC_LOG_ERROR("dtls_init: failed to create certificate serial: %d", ret);
+        mbedtls_x509write_crt_free(&crtwrite);
+        mbedtls_mpi_free(&serial);
+        goto cleanup;
+    }
+    ret = mbedtls_x509write_crt_set_serial(&crtwrite, &serial);
+    if (ret != 0) {
+        TINYRTC_LOG_ERROR("dtls_init: failed to set certificate serial: %d", ret);
+        mbedtls_x509write_crt_free(&crtwrite);
+        mbedtls_mpi_free(&serial);
+        goto cleanup;
+    }
 
     /* Validity: 10 years from now */
     const char *not_before = "20240101000000";
@@ -208,6 +233,7 @@ dtls_context_t *dtls_init(dtls_role_t role)
     if (ret < 0) {
         TINYRTC_LOG_ERROR("dtls_init: failed to sign certificate: %d", ret);
         mbedtls_x509write_crt_free(&crtwrite);
+        mbedtls_mpi_free(&serial);
         goto cleanup;
     }
 
@@ -216,10 +242,12 @@ dtls_context_t *dtls_init(dtls_role_t role)
     if (ret != 0) {
         TINYRTC_LOG_ERROR("dtls_init: failed to parse generated certificate: %d", ret);
         mbedtls_x509write_crt_free(&crtwrite);
+        mbedtls_mpi_free(&serial);
         goto cleanup;
     }
 
     mbedtls_x509write_crt_free(&crtwrite);
+    mbedtls_mpi_free(&serial);
 
     /* Assign to SSL configuration */
     mbedtls_ssl_conf_own_cert(ssl_cfg, cert, pkey);

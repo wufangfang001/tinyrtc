@@ -2,6 +2,12 @@
 
 This directory contains project-specific development notes and memory.
 
+## Current Integration Memory
+
+- Automatic signaling baseline: third-party `sdp-transfer`
+- Default endpoints: `ws://localhost:8765` and `wss://localhost:8766`
+- Historical references to public signaling servers are obsolete for current TinyRTC debugging
+
 ## Structure:
 
 - `YYYY-MM-DD.md - Daily development logs (what was done, decisions made)

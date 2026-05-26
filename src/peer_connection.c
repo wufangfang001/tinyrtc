@@ -9,6 +9,9 @@
  */
 
 #include <stdio.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include "common.h"
 #include "media.h"
 #include "sdp_internal.h"
@@ -346,6 +349,17 @@ tinyrtc_error_t tinyrtc_peer_connection_create_offer(
         TINYRTC_LOG_ERROR("Failed to start ICE gathering: %s", tinyrtc_get_error_string(ice_err));
     }
 
+    /* The answerer may have parsed remote candidates before ICE session creation.
+     * Replay them into the new ICE session so connectivity checks can start. */
+    for (int i = 0; i < pc->remote_sdp.num_candidates; i++) {
+        sdp_candidate_t *remote_cand = &pc->remote_sdp.candidates[i];
+        tinyrtc_error_t add_err = ice_add_remote_candidate(pc->ice, remote_cand);
+        if (add_err != TINYRTC_OK) {
+            TINYRTC_LOG_WARN("Failed to add remote ICE candidate to new ICE session: %s:%d",
+                remote_cand->ip, remote_cand->port);
+        }
+    }
+
     /* Copy ICE candidates to SDP now that gathering is synchronous (for now) */
     for (int i = 0; i < pc->ice->num_local_candidates; i++) {
         ice_candidate_to_sdp(&pc->ice->local[i], &pc->local_sdp.candidates[pc->local_sdp.num_candidates]);
@@ -554,6 +568,18 @@ tinyrtc_error_t tinyrtc_peer_connection_create_answer(
         TINYRTC_LOG_ERROR("Failed to start ICE gathering: %s", tinyrtc_get_error_string(ice_err));
     }
 
+    /* Remote candidates may already be parsed before the answerer creates ICE.
+     * Replay them into the freshly created ICE session so connectivity checks
+     * can start immediately after answer creation. */
+    for (int i = 0; i < pc->remote_sdp.num_candidates; i++) {
+        sdp_candidate_t *remote_cand = &pc->remote_sdp.candidates[i];
+        tinyrtc_error_t add_err = ice_add_remote_candidate(pc->ice, remote_cand);
+        if (add_err != TINYRTC_OK) {
+            TINYRTC_LOG_WARN("Failed to add remote ICE candidate to new ICE session: %s:%d",
+                remote_cand->ip, remote_cand->port);
+        }
+    }
+
     /* Copy ICE candidates to SDP now that gathering is synchronous (for now) */
     for (int i = 0; i < pc->ice->num_local_candidates; i++) {
         ice_candidate_to_sdp(&pc->ice->local[i], &pc->local_sdp.candidates[pc->local_sdp.num_candidates]);
@@ -596,9 +622,24 @@ tinyrtc_error_t tinyrtc_peer_connection_add_ice_candidate(
     TINYRTC_CHECK(pc != NULL, TINYRTC_ERROR_INVALID_ARG);
     TINYRTC_CHECK(candidate != NULL, TINYRTC_ERROR_INVALID_ARG);
 
+    sdp_candidate_t sdp_cand;
+    tinyrtc_error_t ice_err = TINYRTC_OK;
+
+    memset(&sdp_cand, 0, sizeof(sdp_cand));
+    strncpy(sdp_cand.foundation, candidate->foundation ? candidate->foundation : "", sizeof(sdp_cand.foundation) - 1);
+    strncpy(sdp_cand.ip, candidate->ip ? candidate->ip : "", sizeof(sdp_cand.ip) - 1);
+    strncpy(sdp_cand.type, candidate->type ? candidate->type : "", sizeof(sdp_cand.type) - 1);
+    strncpy(sdp_cand.protocol, candidate->protocol ? candidate->protocol : "udp", sizeof(sdp_cand.protocol) - 1);
+    sdp_cand.priority = candidate->priority;
+    sdp_cand.port = candidate->port;
+    sdp_cand.is_ipv6 = candidate->is_ipv6;
+
     aosl_lock_lock(pc->mutex);
 
     int added = sdp_add_candidate(&pc->remote_sdp, candidate);
+    if (added >= 0 && pc->ice != NULL) {
+        ice_err = ice_add_remote_candidate(pc->ice, &sdp_cand);
+    }
 
     aosl_lock_unlock(pc->mutex);
 
@@ -607,9 +648,12 @@ tinyrtc_error_t tinyrtc_peer_connection_add_ice_candidate(
         return TINYRTC_ERROR;
     }
 
-    TINYRTC_LOG_DEBUG("Added remote ICE candidate: %s:%d", candidate->ip, candidate->port);
+    if (ice_err != TINYRTC_OK) {
+        TINYRTC_LOG_WARN("tinyrtc_peer_connection_add_ice_candidate: failed to add candidate to ICE session");
+        return ice_err;
+    }
 
-    /* TODO: Add to ICE candidate list and start connectivity checks */
+    TINYRTC_LOG_DEBUG("Added remote ICE candidate: %s:%d", candidate->ip, candidate->port);
 
     return TINYRTC_OK;
 }
@@ -659,10 +703,38 @@ static void packetize_send_callback(
     memcpy(rtp_buffer + header_len, payload, payload_len);
     size_t packet_len = header_len + payload_len;
 
-    /* TODO: Send via ICE connected UDP socket
-     * For now, we just have the packet ready - when ICE is implemented,
-     * this will be sent to the selected candidate pair.
-     */
+    if (pc->ice == NULL || pc->ice->socket < 0 ||
+        pc->ice->selected_pair == NULL || !pc->ice->selected_pair->succeeded) {
+        TINYRTC_LOG_WARN("packetize_send_callback: no selected ICE pair for RTP send");
+        return;
+    }
+
+    /* Send RTP to the currently selected remote ICE candidate. */
+    {
+        const ice_candidate_internal_t *remote = pc->ice->selected_pair->remote;
+        struct sockaddr_in remote_addr;
+        int sent;
+
+        memset(&remote_addr, 0, sizeof(remote_addr));
+        remote_addr.sin_family = AF_INET;
+        remote_addr.sin_port = htons(remote->port);
+        if (inet_pton(AF_INET, remote->ip, &remote_addr.sin_addr) != 1) {
+            TINYRTC_LOG_ERROR("packetize_send_callback: invalid remote IP %s", remote->ip);
+            return;
+        }
+
+        sent = sendto(pc->ice->socket,
+                      rtp_buffer,
+                      packet_len,
+                      0,
+                      (struct sockaddr *)&remote_addr,
+                      sizeof(remote_addr));
+        if (sent < 0) {
+            TINYRTC_LOG_ERROR("packetize_send_callback: sendto failed for %s:%d",
+                remote->ip, remote->port);
+            return;
+        }
+    }
 
     /* Increment sequence for next packet */
     track->next_sequence = ctx->sequence;

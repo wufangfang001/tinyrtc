@@ -4,10 +4,10 @@
  *
  * Usage with automatic signaling:
  *   ./tinyrtc_recv --room <room-id>
- *   Then open browser_test.html with same room-id and it will connect automatically
+ *   Then open the sdp-transfer browser demo with the same room-id and it will connect automatically
  *
  * Usage with manual signaling (original):
- * 1. Get offer from browser test page, save as offer.sdp
+ * 1. Get offer from your browser-side WebRTC SDP tool, save as offer.sdp
  * 2. Run ./tinyrtc_recv --offer offer.sdp to generate answer.sdp
  * 3. Copy answer.sdp back to browser to complete connection
  * 4. Start receiving media frames from browser
@@ -36,16 +36,57 @@ static void on_connection_state_change(void *user_data, tinyrtc_pc_state_t new_s
     aosl_log(AOSL_LOG_INFO, "Connection state changed: %s\n", state_names[new_state]);
 }
 
+static void demo_open_audio_output_for_track(tinyrtc_track_t *track);
+
 static void on_track_added(void *user_data, tinyrtc_track_t *track) {
     const char *kind = tinyrtc_track_get_kind(track) == TINYRTC_TRACK_KIND_AUDIO ? "audio" : "video";
     const char *codec = tinyrtc_codec_get_name(tinyrtc_track_get_codec(track));
     aosl_log(AOSL_LOG_INFO, "Remote track added: %s codec=%s mid=%s\n", kind, codec, tinyrtc_track_get_mid(track));
+    if (tinyrtc_track_get_kind(track) == TINYRTC_TRACK_KIND_AUDIO) {
+        demo_open_audio_output_for_track(track);
+    }
 }
 
 static int g_audio_frame_count = 0;
 static int g_video_frame_count = 0;
 static FILE *g_audio_file = NULL;
 static FILE *g_video_file = NULL;
+static char g_audio_output_path[64] = "output_audio.bin";
+static char g_video_output_path[64] = "output_video.h264";
+
+static const char *demo_audio_extension_for_codec(tinyrtc_codec_id_t codec_id)
+{
+    switch (codec_id) {
+        case TINYRTC_CODEC_G722:
+            return "g722";
+        case TINYRTC_CODEC_PCMA:
+            return "pcma";
+        case TINYRTC_CODEC_PCMU:
+            return "pcmu";
+        case TINYRTC_CODEC_OPUS:
+            return "opus";
+        default:
+            return "bin";
+    }
+}
+
+static void demo_open_audio_output_for_track(tinyrtc_track_t *track)
+{
+    if (g_audio_file != NULL) {
+        return;
+    }
+
+    snprintf(g_audio_output_path, sizeof(g_audio_output_path),
+             "output_audio.%s",
+             demo_audio_extension_for_codec(tinyrtc_track_get_codec(track)));
+
+    g_audio_file = fopen(g_audio_output_path, "wb");
+    if (g_audio_file) {
+        aosl_log(AOSL_LOG_INFO, "Saving received audio to %s\n", g_audio_output_path);
+    } else {
+        aosl_log(AOSL_LOG_ERROR, "Failed to open %s for writing\n", g_audio_output_path);
+    }
+}
 
 static void on_audio_frame(void *user_data, tinyrtc_track_t *track,
                             const uint8_t *frame, size_t frame_len, uint32_t timestamp)
@@ -137,12 +178,13 @@ static void print_usage(const char *prog_name)
     printf("Options:\n");
     printf("  -h, --help              Show this help message\n");
     printf("  --room <room-id>        Use automatic signaling with specified room ID\n");
-    printf("  --server <url>          Signaling server URL (default: ws://localhost:8080)\n");
+    printf("  --server <url>          Signaling server URL (default: ws://localhost:8765)\n");
     printf("  --no-verify             Skip SSL certificate verification (for self-signed certs)\n");
     printf("  --offer <file>          Use manual mode with offer from file\n");
     printf("\n");
     printf("Examples:\n");
-    printf("  Automatic mode: %s --room my-room --server ws://your-server-ip:8080\n", prog_name);
+    printf("  Automatic mode: %s --room my-room --server ws://your-server-ip:8765\n", prog_name);
+    printf("  Automatic mode (WSS): %s --room my-room --server wss://your-server-ip:8766 --no-verify\n", prog_name);
     printf("  Manual mode:    %s --offer offer.sdp\n", prog_name);
 }
 
@@ -150,7 +192,7 @@ int main(int argc, char **argv)
 {
     const char *room_id = "tinyrtc-demo";
     bool auto_signaling = false;
-    const char *default_signaling_server = "ws://localhost:8080";
+    const char *default_signaling_server = "ws://localhost:8765";
     bool disable_cert_verify = false;
 
     /* Parse arguments */
@@ -168,7 +210,7 @@ int main(int argc, char **argv)
         room_id = argv[2];
         auto_signaling = true;
     }
-    /* Usage: ./tinyrtc_recv --room room-id --server ws://your-server-ip:8080 */
+    /* Usage: ./tinyrtc_recv --room room-id --server ws://your-server-ip:8765 */
     for (int i = 1; i < argc - 1; i++) {
         if (strcmp(argv[i], "--server") == 0) {
             default_signaling_server = argv[i+1];
@@ -205,14 +247,12 @@ int main(int argc, char **argv)
 
     g_pc = pc;
 
-    /* Open files to save received frames */
-    g_audio_file = fopen("output_audio.opus", "wb");
+    /* Open file to save received video frames.
+     * Audio output is opened lazily after negotiation so its extension matches
+     * the actual negotiated codec. */
     g_video_file = fopen("output_video.h264", "wb");
-    if (g_audio_file) {
-        aosl_log(AOSL_LOG_INFO, "Saving received audio to output_audio.opus\n");
-    }
     if (g_video_file) {
-        aosl_log(AOSL_LOG_INFO, "Saving received video to output_video.h264\n");
+        aosl_log(AOSL_LOG_INFO, "Saving received video to %s\n", g_video_output_path);
     }
 
     /* Add media tracks we are willing to receive */
@@ -229,7 +269,7 @@ int main(int argc, char **argv)
     tinyrtc_peer_connection_add_track(pc, &audio_config);
 
     if (auto_signaling) {
-        /* Automatic signaling using public signaling server */
+        /* Automatic signaling using external sdp-transfer server */
         aosl_log(AOSL_LOG_INFO, "Starting automatic signaling... room=%s server=%s\n",
                 room_id, default_signaling_server);
 
@@ -257,7 +297,7 @@ int main(int argc, char **argv)
         }
 
         aosl_log(AOSL_LOG_INFO, "Connected to signaling server, waiting for offer...\n");
-        aosl_log(AOSL_LOG_INFO, "Open browser_test.html and enter room-id: %s\n", room_id);
+        aosl_log(AOSL_LOG_INFO, "Open the sdp-transfer browser demo and enter room-id: %s\n", room_id);
 
         /* Poll until we get an offer */
         while (!g_got_offer && tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
@@ -351,7 +391,7 @@ int main(int argc, char **argv)
         }
 
         aosl_log(AOSL_LOG_INFO, "Answer generated and saved to answer.sdp\n");
-        aosl_log(AOSL_LOG_INFO, "Copy answer.sdp to browser test page to complete connection setup\n");
+        aosl_log(AOSL_LOG_INFO, "Copy answer.sdp to your browser-side WebRTC SDP tool to complete connection setup\n");
         aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
         tinyrtc_free(answer_sdp);
 
@@ -364,7 +404,7 @@ int main(int argc, char **argv)
         aosl_log(AOSL_LOG_INFO, "  Automatic mode:  %s --room <room-id>\n", argv[0]);
         aosl_log(AOSL_LOG_INFO, "  Manual mode:     %s --offer <offer.sdp>\n", argv[0]);
         aosl_log(AOSL_LOG_INFO, "\n");
-        aosl_log(AOSL_LOG_INFO, "In automatic mode, open browser_test.html with same room-id\n");
+        aosl_log(AOSL_LOG_INFO, "In automatic mode, open the sdp-transfer browser demo with the same room-id\n");
         aosl_log(AOSL_LOG_INFO, "and connection will be established automatically\n");
         goto cleanup;
     }
@@ -376,11 +416,11 @@ cleanup:
     /* Close output files */
     if (g_audio_file) {
         fclose(g_audio_file);
-        aosl_log(AOSL_LOG_INFO, "Saved audio frames to output_audio.opus\n");
+        aosl_log(AOSL_LOG_INFO, "Saved audio frames to %s\n", g_audio_output_path);
     }
     if (g_video_file) {
         fclose(g_video_file);
-        aosl_log(AOSL_LOG_INFO, "Saved video frames to output_video.h264\n");
+        aosl_log(AOSL_LOG_INFO, "Saved video frames to %s\n", g_video_output_path);
     }
     g_pc = NULL;
     tinyrtc_peer_connection_destroy(pc);

@@ -78,79 +78,65 @@ tinyrtc_destroy(ctx);
 - TinyRTC **does not handle** signaling transport. Applications exchange SDP/ICE candidates via their own signaling channel.
 - All platform dependencies are abstracted via AOSL, making porting to new platforms easy.
 
-## Testing with Browser
-
-The `tools/` directory contains `browser_test.html` - a simple browser-based test page that supports **two modes**:
+## Browser Interoperability Testing
 
 ### Mode 1: Automatic Signaling (Recommended)
 
-Uses public signaling server to automatically connect:
+Uses the third-party `sdp-transfer` signaling server to automatically connect:
 
 1. Build TinyRTC first (see Building section)
 2. On TinyRTC side, run receiver demo with a room ID:
    ```bash
-   ./build/demo/tinyrtc_recv --room my-test-room
+   ./build/demo/tinyrtc_recv --room my-test-room --server ws://your-server-ip:8765
    ```
    Or run sender demo:
    ```bash
-   ./build/demo/tinyrtc_send --room my-test-room
+   ./build/demo/tinyrtc_send --room my-test-room --server ws://your-server-ip:8765
    ```
-3. Open `tools/browser_test.html` in a modern browser
+3. Open the browser demo provided by your `sdp-transfer` deployment
 4. Click "Start Camera & Microphone"
-5. In "Automatic Signaling" section, enter the **same room ID** and click "Start Automatic Signaling"
-6. SDP will be exchanged automatically via public signaling server
+5. Enter the **same room ID** and make sure the signaling URL points to your `sdp-transfer` instance
+6. SDP will be exchanged automatically via `sdp-transfer`
 7. Connection established - you can see video from browser
 
-The public signaling server `wss://signal-master.appspot.com:443` is used by default. However, this public server is often unreachable. We provide a complete signaling server solution via the `sdp-transfer` submodule for local area network testing:
+Current TinyRTC development should assume the signaling backend is the external `sdp-transfer` project. Historical references to `wss://signal-master.appspot.com:443` and `wss://wsnodejs.nodejitsu.com:443` are obsolete.
 
-### Run your own signaling server (Recommended for LAN testing)
+Current limitation: the `sdp-transfer` browser demo sends `RTCSessionDescription` / `RTCIceCandidate` JSON objects, while TinyRTC's signaling parser still expects SDP as a plain string and does not fully parse remote ICE candidate objects yet. For reliable debugging, treat the stock `sdp-transfer` browser demo as a signaling reference, not as guaranteed end-to-end interoperability proof.
 
-The [sdp-transfer](https://github.com/wufangfang001/sdp-transfer) signaling server is included as a git submodule, providing a complete WebSocket-based SDP exchange solution with:
-- Room-based connection management
-- SSL/TLS support with automatic certificate generation
-- Browser-based test interface
-- Heartbeat and idle timeout cleanup
+### Run `sdp-transfer` (Recommended for LAN testing)
 
-Start the server:
+`sdp-transfer` is maintained separately from TinyRTC. Follow that project's README to install and start the service. The current TinyRTC integration assumes these endpoints by default:
 
-```bash
-# First, ensure submodule is initialized
-git submodule update --init --remote
-
-# Install dependencies
-cd sdp-transfer/
-pip3 install -r requirements.txt
-
-# Generate SSL certificate (for HTTPS/WSS)
-python3 generate_cert.py
-
-# Start signaling server on port 8080
-python3 signaling_server.py --port 8080
-```
-
-The server will be available at:
-- **Web interface**: `https://your-server-ip:8080`
-- **WebSocket endpoint**: `wss://your-server-ip:8080/ws`
+- **WS signaling**: `ws://your-server-ip:8765`
+- **WSS signaling**: `wss://your-server-ip:8766`
 
 Then use it with:
 ```bash
-# In TinyRTC receiver
-./tinyrtc_recv --room my-test-room --server wss://your-server-ip:8080/ws
+# TinyRTC receiver over WS
+./tinyrtc_recv --room my-test-room --server ws://your-server-ip:8765
 
-# Or with sender
-./tinyrtc_send --room my-test-room --server wss://your-server-ip:8080/ws
+# TinyRTC sender over WS
+./tinyrtc_send --room my-test-room --server ws://your-server-ip:8765
+
+# TinyRTC sender over WSS with self-signed certificate
+./tinyrtc_send --room my-test-room --server wss://your-server-ip:8766 --no-verify
 ```
 
-In your browser, open `https://your-server-ip:8080` to access the web interface for SDP exchange testing.
+For self-signed WSS deployments:
+
+1. Open `https://your-server-ip:8766` once in the browser and trust the certificate
+2. Use `wss://your-server-ip:8766` in the `sdp-transfer` browser demo
+3. Add `--no-verify` to TinyRTC demo commands
 
 ### Mode 2: Manual SDP Exchange (Original)
 
-1. Open `tools/browser_test.html` in a modern browser
-2. Click "Start Camera & Microphone"
-3. Create offer in browser, copy to `offer.sdp`
-4. On TinyRTC side: run `./tinyrtc_recv --offer offer.sdp` to get `answer.sdp`
-5. Paste answer back to browser
-6. Connection established, you can see video from browser
+1. Use any browser-side WebRTC test page or your own signaling/debug page to create an SDP offer
+2. Save the offer as `offer.sdp`
+3. On TinyRTC side: run `./tinyrtc_recv --offer offer.sdp` to get `answer.sdp`
+4. Paste the answer back into the browser-side tool
+5. Connection established, you can see video from browser
+
+This manual flow is currently the safer baseline because it avoids the JSON object-shape mismatch in `sdp-transfer`'s stock browser demo.
 
 ## Building
 

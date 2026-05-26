@@ -95,6 +95,10 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig);
 static int sig_send_ws_frame(struct tinyrtc_signaling *sig, uint8_t opcode,
                               const uint8_t *data, size_t len);
 static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *data, size_t len);
+static char *sig_extract_json_string_field(const char *json, const char *field_name);
+static char *sig_extract_sdp_value(const char *json);
+static tinyrtc_ice_candidate_t *sig_extract_candidate_value(const char *json);
+static void sig_free_candidate(tinyrtc_ice_candidate_t *candidate);
 
 /* Generate a random client ID */
 static void sig_generate_client_id(struct tinyrtc_signaling *sig, char *buf, size_t len) {
@@ -105,6 +109,205 @@ static void sig_generate_client_id(struct tinyrtc_signaling *sig, char *buf, siz
         buf[i] = charset[rnd % (sizeof(charset) - 1)];
     }
     buf[len - 1] = '\0';
+}
+
+static char *sig_extract_json_string_field(const char *json, const char *field_name)
+{
+    char pattern[64];
+    const char *found;
+    const char *value;
+    const char *end;
+    size_t raw_len;
+    char *out;
+    size_t i, j;
+
+    snprintf(pattern, sizeof(pattern), "\"%s\"", field_name);
+    found = strstr(json, pattern);
+    if (found == NULL) {
+        return NULL;
+    }
+
+    value = strchr(found + strlen(pattern), ':');
+    if (value == NULL) {
+        return NULL;
+    }
+    value++;
+    while (*value == ' ' || *value == '\t') {
+        value++;
+    }
+    if (*value != '"') {
+        return NULL;
+    }
+    value++;
+
+    end = value;
+    while (*end != '\0') {
+        if (*end == '"' && (end == value || *(end - 1) != '\\')) {
+            break;
+        }
+        end++;
+    }
+    if (*end != '"') {
+        return NULL;
+    }
+
+    raw_len = (size_t)(end - value);
+    out = (char *)aosl_malloc(raw_len + 1);
+    if (out == NULL) {
+        return NULL;
+    }
+
+    i = 0;
+    j = 0;
+    while (i < raw_len && value[i] != '\0') {
+        if (value[i] == '\\' && i + 1 < raw_len) {
+            if (value[i + 1] == 'r') {
+                out[j++] = '\r';
+                i += 2;
+            } else if (value[i + 1] == 'n') {
+                out[j++] = '\n';
+                i += 2;
+            } else if (value[i + 1] == 't') {
+                out[j++] = '\t';
+                i += 2;
+            } else if (value[i + 1] == '"' || value[i + 1] == '\\' || value[i + 1] == '/') {
+                out[j++] = value[i + 1];
+                i += 2;
+            } else {
+                out[j++] = value[i++];
+            }
+        } else {
+            out[j++] = value[i++];
+        }
+    }
+    out[j] = '\0';
+
+    return out;
+}
+
+static char *sig_extract_sdp_value(const char *json)
+{
+    char *found;
+    char *value;
+
+    found = strstr(json, "\"sdp\"");
+    if (found == NULL) {
+        return NULL;
+    }
+
+    value = strchr(found + 5, ':');
+    if (value == NULL) {
+        return NULL;
+    }
+    value++;
+    while (*value == ' ' || *value == '\t') {
+        value++;
+    }
+
+    if (*value == '"') {
+        return sig_extract_json_string_field(found, "sdp");
+    }
+
+    if (*value == '{') {
+        return sig_extract_json_string_field(value, "sdp");
+    }
+
+    return NULL;
+}
+
+static tinyrtc_ice_candidate_t *sig_extract_candidate_value(const char *json)
+{
+    char *found;
+    char *value;
+    char *candidate_str = NULL;
+    tinyrtc_ice_candidate_t *candidate = NULL;
+    char foundation[32] = {0};
+    char protocol[32] = {0};
+    char ip[128] = {0};
+    char type[32] = {0};
+    char prio_str[32] = {0};
+    char port_str[16] = {0};
+    int port = 0;
+    unsigned long priority = 0;
+    char *cursor;
+
+    found = strstr(json, "\"candidate\"");
+    if (found == NULL) {
+        return NULL;
+    }
+
+    value = strchr(found + 11, ':');
+    if (value == NULL) {
+        return NULL;
+    }
+    value++;
+    while (*value == ' ' || *value == '\t') {
+        value++;
+    }
+
+    if (*value == '"') {
+        candidate_str = sig_extract_json_string_field(found, "candidate");
+    } else if (*value == '{') {
+        candidate_str = sig_extract_json_string_field(value, "candidate");
+    }
+
+    if (candidate_str == NULL) {
+        return NULL;
+    }
+
+    cursor = candidate_str;
+    if (strncmp(cursor, "candidate:", 10) == 0) {
+        cursor += 10;
+    }
+
+    if (sscanf(cursor, "%31s %*d %31s %31s %127s %15s typ %31s",
+               foundation, protocol, prio_str, ip, port_str, type) != 6) {
+        aosl_free(candidate_str);
+        return NULL;
+    }
+
+    priority = strtoul(prio_str, NULL, 10);
+    port = atoi(port_str);
+    if (port <= 0) {
+        aosl_free(candidate_str);
+        return NULL;
+    }
+
+    candidate = (tinyrtc_ice_candidate_t *)aosl_calloc(1, sizeof(*candidate));
+    if (candidate == NULL) {
+        aosl_free(candidate_str);
+        return NULL;
+    }
+
+    candidate->foundation = tinyrtc_strdup(foundation);
+    candidate->protocol = tinyrtc_strdup(protocol);
+    candidate->ip = tinyrtc_strdup(ip);
+    candidate->type = tinyrtc_strdup(type);
+    candidate->priority = (uint32_t)priority;
+    candidate->port = (uint16_t)port;
+    candidate->is_ipv6 = strchr(ip, ':') != NULL;
+
+    aosl_free(candidate_str);
+
+    if (candidate->foundation == NULL || candidate->protocol == NULL ||
+        candidate->ip == NULL || candidate->type == NULL) {
+        sig_free_candidate(candidate);
+        return NULL;
+    }
+
+    return candidate;
+}
+
+static void sig_free_candidate(tinyrtc_ice_candidate_t *candidate)
+{
+    if (candidate == NULL) {
+        return;
+    }
+    tinyrtc_internal_free(candidate->foundation);
+    tinyrtc_internal_free(candidate->ip);
+    tinyrtc_internal_free(candidate->type);
+    tinyrtc_internal_free(candidate->protocol);
+    tinyrtc_internal_free(candidate);
 }
 
 /* Parse URL into host, port, and whether it's secure (wss) */
@@ -684,8 +887,8 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
 
     aosl_log(AOSL_LOG_DEBUG, "Signaling: received message: %.100s...", json);
 
-    /* The protocol format from Python signaling server is:
-     * Simple flat format with "type" field at top level:
+    /* The protocol envelope from the current sdp-transfer server is:
+     * Simple flat JSON with a top-level "type" field:
      * {
      *   "type": "joined",
      *   "role": "caller"|"callee",
@@ -697,20 +900,26 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
      * }
      * {
      *   "type": "offer",
-     *   "sdp": "..."
+     *   "sdp": ...
      * }
      * {
      *   "type": "answer",
-     *   "sdp": "..."
+     *   "sdp": ...
      * }
      * {
      *   "type": "ice-candidate",
-     *   "candidate": "..."
+     *   "candidate": ...
      * }
      * {
      *   "type": "error",
      *   "message": "..."
      * }
+     *
+     * Important limitation:
+     * - sdp-transfer's browser demo forwards RTCSessionDescription/RTCIceCandidate
+     *   objects as JSON values.
+     * - TinyRTC currently only extracts SDP reliably when it arrives as a plain
+     *   string and does not fully parse forwarded ICE candidate objects yet.
      */
 
     /* Find the type field */
@@ -744,11 +953,11 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
         aosl_free(json);
         return;
     } else if (strncmp(type_ptr, "peer-joined", 11) == 0) {
-        /* Peer has joined - we should send offer now */
-        aosl_log(AOSL_LOG_INFO, "Signaling: peer joined room, ready to send offer");
-        /* TODO: trigger send offer callback */
-        aosl_free(json);
-        return;
+        event_type = TINYRTC_SIGNAL_EVENT_PEER_JOIN;
+        have_type = true;
+    } else if (strncmp(type_ptr, "peer-left", 9) == 0) {
+        event_type = TINYRTC_SIGNAL_EVENT_PEER_LEAVE;
+        have_type = true;
     } else if (strncmp(type_ptr, "offer", 5) == 0) {
         event_type = TINYRTC_SIGNAL_EVENT_OFFER;
         have_type = true;
@@ -789,56 +998,22 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
         event.data.candidate = NULL;
 
         /* Extract the actual data based on type */
-        if (event_type == TINYRTC_SIGNAL_EVENT_OFFER || event_type == TINYRTC_SIGNAL_EVENT_ANSWER) {
-            char *found = strstr(json, "\"sdp\"");
-            if (found) {
-                found = strchr(found + 5, ':');
-                if (found) {
-                    found++;
-                    while (*found && (*found == ' ' || *found == '\"')) {
-                        found++;
-                    }
-                    char *end = found;
-                    while (*end && *end != '\"' && *end != '}' && *end != ',') {
-                        end++;
-                    }
-                    size_t sdp_len = (size_t)(end - found);
-                    char *sdp = (char *)aosl_malloc(sdp_len + 1);
-                    if (sdp) {
-                        /* Unescape JSON escaped newlines: \\r\\n -> \r\n */
-                        size_t i = 0, j = 0;
-                        while (i < sdp_len && found[i] != '\0') {
-                            if (found[i] == '\\' && i + 1 < sdp_len) {
-                                /* Handle escaped characters */
-                                if (found[i+1] == 'r') {
-                                    sdp[j++] = '\r';
-                                    i += 2;
-                                } else if (found[i+1] == 'n') {
-                                    sdp[j++] = '\n';
-                                    i += 2;
-                                } else if (found[i+1] == '\\') {
-                                    sdp[j++] = '\\';
-                                    i += 2;
-                                } else {
-                                    sdp[j++] = found[i++];
-                                }
-                            } else {
-                                sdp[j++] = found[i++];
-                            }
-                        }
-                        sdp[j] = '\0';
-                        if (event_type == TINYRTC_SIGNAL_EVENT_OFFER) {
-                            event.data.offer = sdp;
-                        } else {
-                            event.data.answer = sdp;
-                        }
-                        TINYRTC_LOG_DEBUG("Extracted SDP: %zu bytes, after unescaping %zu bytes", sdp_len, j);
-                    }
+        if (event_type == TINYRTC_SIGNAL_EVENT_PEER_JOIN) {
+            aosl_log(AOSL_LOG_INFO, "Signaling: peer joined room");
+        } else if (event_type == TINYRTC_SIGNAL_EVENT_PEER_LEAVE) {
+            aosl_log(AOSL_LOG_INFO, "Signaling: peer left room");
+        } else if (event_type == TINYRTC_SIGNAL_EVENT_OFFER || event_type == TINYRTC_SIGNAL_EVENT_ANSWER) {
+            char *sdp = sig_extract_sdp_value(json);
+            if (sdp != NULL) {
+                if (event_type == TINYRTC_SIGNAL_EVENT_OFFER) {
+                    event.data.offer = sdp;
+                } else {
+                    event.data.answer = sdp;
                 }
+                TINYRTC_LOG_DEBUG("Extracted SDP: %zu bytes", strlen(sdp));
             }
         } else if (event_type == TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE) {
-            /* For now we just leave it as NULL since we need parsing support */
-            event.data.candidate = NULL;
+            event.data.candidate = sig_extract_candidate_value(json);
         }
 
         sig->callback(&event, sig->user_data);
@@ -848,6 +1023,8 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
             aosl_free(event.data.offer);
         } else if (event_type == TINYRTC_SIGNAL_EVENT_ANSWER && event.data.answer != NULL) {
             aosl_free(event.data.answer);
+        } else if (event_type == TINYRTC_SIGNAL_EVENT_ICE_CANDIDATE && event.data.candidate != NULL) {
+            sig_free_candidate(event.data.candidate);
         }
     }
 
@@ -1181,11 +1358,11 @@ tinyrtc_error_t tinyrtc_signaling_send_offer(
         return TINYRTC_ERROR_INVALID_ARG;
     }
 
-    /* Build JSON according to Python server expected format - simple flat format */
+    /* Build JSON according to current sdp-transfer expected format - simple flat format */
     /* Need to escape SDP because it contains newlines */
     char json[8192];
     char escaped_sdp[4096];
-    int escaped_len = sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
+    sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
 
     int len = snprintf(json, sizeof(json),
         "{\"type\": \"offer\", \"sdp\": \"%s\"}",
@@ -1214,11 +1391,11 @@ tinyrtc_error_t tinyrtc_signaling_send_answer(
         return TINYRTC_ERROR_INVALID_ARG;
     }
 
-    /* Build JSON according to Python server expected format - simple flat format */
+    /* Build JSON according to current sdp-transfer expected format - simple flat format */
     /* Need to escape SDP because it contains newlines */
     char json[8192];
     char escaped_sdp[4096];
-    int escaped_len = sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
+    sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
 
     int len = snprintf(json, sizeof(json),
         "{\"type\": \"answer\", \"sdp\": \"%s\"}",
