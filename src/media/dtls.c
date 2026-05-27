@@ -41,6 +41,7 @@
 static bool dtls_mbedtls_initialized = false;
 static mbedtls_entropy_context dtls_entropy;
 static mbedtls_ctr_drbg_context dtls_ctr_drbg;
+static const int dtls_mbedtls_debug_enabled = 0;
 
 /* =============================================================================
  * Internal helpers
@@ -301,8 +302,10 @@ dtls_context_t *dtls_init(dtls_role_t role)
 
     /* Use ECDH key exchange */
     mbedtls_ssl_conf_rng(ssl_cfg, dtls_our_random, &dtls_ctr_drbg);
-    mbedtls_ssl_conf_dbg(ssl_cfg, dtls_mbedtls_debug, dtls);
-    mbedtls_debug_set_threshold(4);
+    if (dtls_mbedtls_debug_enabled) {
+        mbedtls_ssl_conf_dbg(ssl_cfg, dtls_mbedtls_debug, dtls);
+        mbedtls_debug_set_threshold(4);
+    }
 
     if (role == DTLS_ROLE_SERVER) {
         mbedtls_ssl_cookie_init(&dtls->cookie_ctx);

@@ -50,16 +50,13 @@ MINUNIT_TEST(test_srtp_encrypt_decrypt_roundtrip)
 
     srtp = srtp_init(key, salt);
     MINUNIT_ASSERT(srtp != NULL, "Expected SRTP context init to succeed");
-    printf("debug srtp: init ok\n");
 
     MINUNIT_ASSERT(srtp_encrypt_packet(srtp, packet, &len, sizeof(packet)) == TINYRTC_OK,
                    "Expected SRTP packet encryption to succeed");
-    printf("debug srtp: encrypt ok len=%zu\n", len);
     MINUNIT_ASSERT(len == 30, "Expected SRTP auth tag to extend packet by 10 bytes");
 
     MINUNIT_ASSERT(srtp_decrypt_packet(srtp, packet, len, &output_len) == TINYRTC_OK,
                    "Expected SRTP packet decryption to succeed");
-    printf("debug srtp: decrypt ok out=%zu\n", output_len);
     MINUNIT_ASSERT(output_len == sizeof(original) - (sizeof(original) - 20),
                    "Expected decrypted packet length to match original RTP length");
     MINUNIT_ASSERT(memcmp(packet, original, output_len) == 0,

@@ -75,8 +75,10 @@ MINUNIT_TEST(test_dtls_init_configures_debug_callback)
 
     dtls = dtls_init(DTLS_ROLE_SERVER);
     MINUNIT_ASSERT(dtls != NULL, "Expected DTLS init to succeed");
-    MINUNIT_ASSERT(dtls->ctx->f_dbg != NULL, "Expected DTLS config to install mbedTLS debug callback");
-    MINUNIT_ASSERT(dtls->ctx->p_dbg == dtls, "Expected DTLS debug callback context to point at dtls");
+    MINUNIT_ASSERT(dtls->ctx->f_dbg == NULL,
+                   "Expected DTLS config to keep mbedTLS debug callback disabled by default");
+    MINUNIT_ASSERT(dtls->ctx->p_dbg == NULL,
+                   "Expected DTLS debug callback context to stay NULL when debug is disabled");
 
     dtls_destroy(dtls);
     return 0;
@@ -235,11 +237,15 @@ MINUNIT_TEST(test_dtls_derive_srtp_keys_rejects_missing_master_secret)
     uint8_t server_key[16];
     uint8_t server_salt[14];
     tinyrtc_error_t err;
+    int old_log_level;
 
     dtls = dtls_init(DTLS_ROLE_CLIENT);
     MINUNIT_ASSERT(dtls != NULL, "Expected DTLS init to succeed");
 
+    old_log_level = aosl_get_log_level();
+    aosl_set_log_level(AOSL_LOG_CRIT);
     err = dtls_derive_srtp_keys(dtls, client_key, client_salt, server_key, server_salt);
+    aosl_set_log_level(old_log_level);
     MINUNIT_ASSERT(err != TINYRTC_OK,
                    "Expected SRTP key derivation to fail without captured DTLS master secret");
 

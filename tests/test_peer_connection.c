@@ -49,6 +49,7 @@ MINUNIT_TEST(test_pc_secure_media_ready_rejects_missing_dtls_master_secret)
     uint8_t server_key[16];
     uint8_t server_salt[14];
     tinyrtc_error_t err;
+    int old_log_level;
 
     memset(&pc, 0, sizeof(pc));
 
@@ -60,7 +61,10 @@ MINUNIT_TEST(test_pc_secure_media_ready_rejects_missing_dtls_master_secret)
     }
     pc.dtls = dtls;
 
+    old_log_level = aosl_get_log_level();
+    aosl_set_log_level(AOSL_LOG_CRIT);
     err = dtls_derive_srtp_keys(dtls, client_key, client_salt, server_key, server_salt);
+    aosl_set_log_level(old_log_level);
     MINUNIT_ASSERT(err == TINYRTC_ERROR_INVALID_STATE,
                    "Expected SRTP key derivation to fail when master secret was not captured");
     MINUNIT_ASSERT(!pc.srtp_initialized,

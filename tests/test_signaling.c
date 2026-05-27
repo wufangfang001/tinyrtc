@@ -189,6 +189,7 @@ MINUNIT_TEST(test_peer_connection_create_answer_adds_remote_candidates_to_ice)
     tinyrtc_peer_connection_t *pc;
     tinyrtc_pc_config_t config;
     tinyrtc_track_config_t video_cfg;
+    int old_log_level;
     const char *offer_sdp =
         "v=0\r\n"
         "o=- 100 100 IN IP4 0.0.0.0\r\n"
@@ -229,7 +230,10 @@ MINUNIT_TEST(test_peer_connection_create_answer_adds_remote_candidates_to_ice)
     MINUNIT_ASSERT(pc->remote_sdp.num_candidates == 2, "Expected two remote candidates in parsed SDP");
     MINUNIT_ASSERT(pc->ice == NULL, "Expected ICE session not to exist before create_answer");
 
+    old_log_level = aosl_get_log_level();
+    aosl_set_log_level(AOSL_LOG_CRIT);
     err = tinyrtc_peer_connection_create_answer(pc, &answer_sdp);
+    aosl_set_log_level(old_log_level);
     MINUNIT_ASSERT(err == TINYRTC_OK, "Expected answer creation to succeed");
     MINUNIT_ASSERT(answer_sdp != NULL, "Expected generated answer SDP");
     MINUNIT_ASSERT(pc->ice != NULL, "Expected ICE session to be created");
