@@ -16,6 +16,8 @@
 #include "ice_internal.h"
 
 #include <mbedtls/ssl.h>
+#include <mbedtls/ssl_cookie.h>
+#include <mbedtls/timing.h>
 #include <mbedtls/x509_crt.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/sha256.h>
@@ -49,9 +51,16 @@ typedef struct dtls_context {
     mbedtls_x509_crt *cert;             /* Our certificate */
     mbedtls_pk_context *pkey;           /* Our private key */
     dtls_role_t role;
+    ice_session_t *ice;                 /* Selected ICE transport for DTLS I/O */
     int socket;                         /* UDP socket file descriptor for I/O */
     char fingerprint[DTLS_FINGERPRINT_MAX_LEN * 3]; /* SHA-256 fingerprint in hex */
     bool handshake_complete;
+    mbedtls_ssl_cookie_ctx cookie_ctx;  /* DTLS HelloVerifyRequest cookies */
+    bool cookie_initialized;
+    mbedtls_timing_delay_context timer; /* DTLS retransmit timer state */
+    uint8_t pending_datagram[2048];
+    size_t pending_datagram_len;
+    size_t pending_datagram_offset;
     /* Store captured master secret for DTLS-SRTP key derivation
      * Compatible with both mbedtls 2.x and 3.x */
     unsigned char master_secret[48];
@@ -91,10 +100,10 @@ dtls_context_t *dtls_init(dtls_role_t role);
  * @brief Start DTLS handshake after ICE connected
  *
  * @param dtls DTLS context
- * @param fd UDP socket file descriptor to use for DTLS
+ * @param ice ICE session carrying the selected socket/candidate pair
  * @return TINYRTC_OK on success
  */
-tinyrtc_error_t dtls_start(dtls_context_t *dtls, int fd);
+tinyrtc_error_t dtls_start(dtls_context_t *dtls, ice_session_t *ice);
 
 /**
  * @brief Destroy DTLS context
@@ -131,6 +140,17 @@ bool dtls_verify_fingerprint(dtls_context_t *dtls, const char *peer_fingerprint)
  * @return TINYRTC_OK on success, error otherwise
  */
 tinyrtc_error_t dtls_process_data(dtls_context_t *dtls, const uint8_t *data, size_t len);
+
+/**
+ * @brief Progress DTLS handshake when no new datagram is being delivered.
+ *
+ * Used for timer-driven retransmissions and state transitions such as
+ * HelloVerifyRequest handling.
+ *
+ * @param dtls DTLS context
+ * @return TINYRTC_OK on success, error otherwise
+ */
+tinyrtc_error_t dtls_poll_handshake(dtls_context_t *dtls);
 
 /**
  * @brief Check if DTLS handshake is complete

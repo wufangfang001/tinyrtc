@@ -161,6 +161,16 @@ tinyrtc_error_t pc_process_incoming_rtp(
     const uint8_t *packet,
     size_t len);
 
+/**
+ * @brief Check whether secure media send is ready.
+ *
+ * Requires a selected ICE pair and initialized SRTP.
+ *
+ * @param pc Peer connection
+ * @return true if secure media send can proceed
+ */
+bool pc_is_secure_media_ready(const tinyrtc_peer_connection_t *pc);
+
 #ifdef __cplusplus
 }
 #endif

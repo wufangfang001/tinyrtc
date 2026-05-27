@@ -529,8 +529,6 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
     /* Check Sec-WebSocket-Accept */
     char expected_accept[32]; // SHA-1 always produces exactly 28 bytes base64 + 1 null terminator, extra space to avoid overflow
     sig_compute_accept_key(client_key, expected_accept, sizeof(expected_accept));
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: computed accept: '%s' (len=%zu)\n", expected_accept, strlen(expected_accept));
-
     char *accept_header = strstr(response, "Sec-WebSocket-Accept:");
     if (!accept_header) {
         snprintf(sig->last_error, sizeof(sig->last_error) - 1,
@@ -557,8 +555,6 @@ static int sig_perform_websocket_handshake(struct tinyrtc_signaling *sig,
         // If still not found, leave as-is (buffer is null terminated already)
     }
 
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: received accept: '%s' (len=%zu)\n", accept_header, strlen(accept_header));
-
     if (strcmp(accept_header, expected_accept) != 0) {
         snprintf(sig->last_error, sizeof(sig->last_error) - 1,
                  "Invalid Sec-WebSocket-Accept: expected %s (len=%zu), got %s (len=%zu)",
@@ -574,8 +570,6 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
     /* Read header */
     uint8_t hdr[2];
     int ret;
-
-    aosl_log(AOSL_LOG_DEBUG, "sig_read_ws_frame: starting to read frame header\n");
 
     bool is_wss = sig_ssl_configured(sig);
 
@@ -603,9 +597,6 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
     uint8_t opcode = hdr[0] & 0x0F;
     bool masked = (hdr[1] & 0x80) != 0;
     uint8_t payload_len = hdr[1] & 0x7F;
-
-    aosl_log(AOSL_LOG_DEBUG, "sig_read_ws_frame: hdr: fin=%d opcode=%d masked=%d payload_len(7bit)=%d\n",
-            (int)fin, (int)opcode, (int)masked, (int)payload_len);
 
     size_t len = payload_len;
     int bytes_needed = 0;
@@ -733,7 +724,6 @@ static int sig_read_ws_frame(struct tinyrtc_signaling *sig) {
                 return 0; /* Need more fragments */
             }
             /* Finished single frame message */
-            aosl_log(AOSL_LOG_DEBUG, "sig_read_ws_frame: processing complete single frame, len=%zu\n", len);
             sig_process_message(sig, sig->recv_buf, len);
             sig->recv_len = 0;
             break;
@@ -899,7 +889,6 @@ static int sig_configure_tls_client(struct tinyrtc_signaling *sig,
 
 /* Process incoming text message - parse JSON and invoke callback */
 static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *data, size_t len) {
-    aosl_log(AOSL_LOG_DEBUG, "sig_process_message: received message, len=%zu\n", len);
     /* Null-terminate for easy parsing */
     char *json = (char *)aosl_malloc(len + 1);
     if (!json) {
@@ -908,8 +897,6 @@ static void sig_process_message(struct tinyrtc_signaling *sig, const uint8_t *da
     }
     memcpy(json, data, len);
     json[len] = '\0';
-
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: received message: %.100s...", json);
 
     /* The protocol envelope from the current sdp-transfer server is:
      * Simple flat JSON with a top-level "type" field:

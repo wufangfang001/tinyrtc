@@ -49,6 +49,41 @@ static const char *log_level_names[] = {
     [TINYRTC_LOG_ERROR] = "ERROR",
 };
 
+static tinyrtc_error_t pc_initialize_srtp_after_dtls(tinyrtc_peer_connection_t *pc)
+{
+    unsigned char client_key[16];
+    unsigned char server_key[16];
+    unsigned char client_salt[14];
+    unsigned char server_salt[14];
+    tinyrtc_error_t err;
+
+    TINYRTC_CHECK(pc != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(pc->dtls != NULL, TINYRTC_ERROR_INVALID_STATE);
+
+    TINYRTC_LOG_DEBUG("Deriving SRTP keys");
+    err = dtls_derive_srtp_keys(pc->dtls, client_key, client_salt, server_key, server_salt);
+    if (err != TINYRTC_OK) {
+        TINYRTC_LOG_ERROR("Failed to derive SRTP keys: %s", tinyrtc_get_error_string(err));
+        return err;
+    }
+
+    if (pc->config.is_initiator) {
+        pc->srtp = srtp_init(client_key, client_salt);
+    } else {
+        pc->srtp = srtp_init(server_key, server_salt);
+    }
+
+    if (pc->srtp == NULL) {
+        TINYRTC_LOG_ERROR("Failed to initialize SRTP");
+        return TINYRTC_ERROR_MEMORY;
+    }
+
+    pc->srtp_initialized = true;
+    TINYRTC_LOG_INFO("SRTP initialized successfully, media encryption ready");
+    fflush(stdout);
+    return TINYRTC_OK;
+}
+
 /* =============================================================================
  * Public API implementation
  * ========================================================================== */
@@ -225,7 +260,7 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
                 dtls_role_t role = pc->config.is_initiator ? DTLS_ROLE_CLIENT : DTLS_ROLE_SERVER;
                 pc->dtls = dtls_init(role);
                 if (pc->dtls != NULL) {
-                    dtls_start(pc->dtls, pc->ice->socket);
+                    dtls_start(pc->dtls, pc->ice);
                     TINYRTC_LOG_INFO("DTLS handshake started (role=%s)",
                         role == DTLS_ROLE_CLIENT ? "client" : "server");
                 } else {
@@ -243,30 +278,11 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
 
         /* Process DTLS if DTLS is started */
         if (pc->dtls != NULL && !pc->srtp_initialized) {
+            dtls_poll_handshake(pc->dtls);
             int dtls_done = dtls_is_handshake_complete(pc->dtls);
             TINYRTC_LOG_DEBUG("Peer %p: DTLS handshake check done, complete=%d", pc, dtls_done);
             if (dtls_done) {
-                /* DTLS done, extract keys and initialize SRTP */
-                unsigned char client_key[16];
-                unsigned char server_key[16];
-                unsigned char client_salt[14];
-                unsigned char server_salt[14];
-                TINYRTC_LOG_DEBUG("Deriving SRTP keys");
-                dtls_derive_srtp_keys(pc->dtls, client_key, client_salt, server_key, server_salt);
-                if (pc->config.is_initiator) {
-                    /* We are the initiator (client) -> use client key/salt */
-                    pc->srtp = srtp_init(client_key, client_salt);
-                } else {
-                    /* We are the receiver (server) -> use server key/salt */
-                    pc->srtp = srtp_init(server_key, server_salt);
-                }
-                if (pc->srtp != NULL) {
-                    pc->srtp_initialized = true;
-                    TINYRTC_LOG_INFO("SRTP initialized successfully, media encryption ready");
-                    fflush(stdout);
-                } else {
-                    TINYRTC_LOG_ERROR("Failed to initialize SRTP");
-                }
+                (void)pc_initialize_srtp_after_dtls(pc);
             }
         }
     }

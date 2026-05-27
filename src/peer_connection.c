@@ -703,10 +703,16 @@ static void packetize_send_callback(
     memcpy(rtp_buffer + header_len, payload, payload_len);
     size_t packet_len = header_len + payload_len;
 
-    if (pc->ice == NULL || pc->ice->socket < 0 ||
-        pc->ice->selected_pair == NULL || !pc->ice->selected_pair->succeeded) {
+    if (!pc_is_secure_media_ready(pc)) {
         TINYRTC_LOG_WARN("packetize_send_callback: no selected ICE pair for RTP send");
         return;
+    }
+
+    if (pc->srtp != NULL) {
+        if (srtp_encrypt_packet(pc->srtp, rtp_buffer, &packet_len, sizeof(rtp_buffer)) != TINYRTC_OK) {
+            TINYRTC_LOG_ERROR("packetize_send_callback: failed to SRTP encrypt packet");
+            return;
+        }
     }
 
     /* Send RTP to the currently selected remote ICE candidate. */
@@ -902,4 +908,14 @@ tinyrtc_error_t pc_process_incoming_rtp(
     }
 
     return TINYRTC_OK;
+}
+
+bool pc_is_secure_media_ready(const tinyrtc_peer_connection_t *pc)
+{
+    if (pc == NULL || pc->ice == NULL || pc->ice->socket < 0 ||
+        pc->ice->selected_pair == NULL || !pc->ice->selected_pair->succeeded) {
+        return false;
+    }
+
+    return pc->srtp_initialized;
 }

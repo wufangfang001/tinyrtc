@@ -4,7 +4,10 @@
 
 set(TEST_SOURCES
     tests_main.c
+    test_dtls.c
+    test_peer_connection.c
     test_rtp.c
+    test_srtp.c
     test_sdp.c
     test_jitter_buffer.c
     test_stun.c

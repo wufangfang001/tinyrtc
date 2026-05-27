@@ -14,11 +14,18 @@
 
 #include "mbedtls/entropy.h"
 #include "mbedtls/ctr_drbg.h"
+#include "mbedtls/debug.h"
 #include "mbedtls/ssl.h"
+#include "mbedtls/ssl_cookie.h"
 #include "mbedtls/entropy_poll.h"
+#include "mbedtls/timing.h"
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/ecp.h"
 #include "mbedtls/ecdh.h"
+
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 /* 
  * NOTE: TinyRTC currently supports both mbedtls 2.28+ and mbedtls 3.x
@@ -44,13 +51,172 @@ static int dtls_our_random(void *p_rng, unsigned char *output, size_t output_len
     return mbedtls_ctr_drbg_random(p_rng, output, output_len);
 }
 
-/* Custom key export callback for mbedtls to capture master secret
- * This is required for mbedtls 3.x compatibility where mbedtls_ssl_export_keys was removed
- */
-typedef struct {
-    unsigned char *master_secret;
-    bool got_master_secret;
-} dtls_key_export_ctx_t;
+static tinyrtc_error_t dtls_configure_runtime_io(dtls_context_t *dtls);
+
+static void dtls_mbedtls_debug(void *ctx, int level, const char *file, int line, const char *str)
+{
+    dtls_context_t *dtls = (dtls_context_t *)ctx;
+    const char *role = "unknown";
+    char message[256];
+    size_t len;
+
+    if (dtls != NULL) {
+        role = (dtls->role == DTLS_ROLE_CLIENT) ? "client" : "server";
+    }
+
+    snprintf(message, sizeof(message), "dtls-mbedtls[%s][L%d %s:%d]: %s",
+             role, level, file, line, str);
+    len = strlen(message);
+    while (len > 0 && (message[len - 1] == '\n' || message[len - 1] == '\r')) {
+        message[--len] = '\0';
+    }
+
+    aosl_log(AOSL_LOG_INFO, "TinyRTC: %s\n", message);
+}
+
+static int dtls_bio_send(void *ctx, const unsigned char *buf, size_t len)
+{
+    dtls_context_t *dtls = (dtls_context_t *)ctx;
+    const ice_candidate_internal_t *remote;
+    struct sockaddr_in remote_addr;
+    int sent;
+
+    if (dtls == NULL || dtls->ice == NULL || dtls->socket < 0 ||
+        dtls->ice->selected_pair == NULL || dtls->ice->selected_pair->remote == NULL) {
+        return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
+    }
+
+    remote = dtls->ice->selected_pair->remote;
+    memset(&remote_addr, 0, sizeof(remote_addr));
+    remote_addr.sin_family = AF_INET;
+    remote_addr.sin_port = htons(remote->port);
+    if (inet_pton(AF_INET, remote->ip, &remote_addr.sin_addr) != 1) {
+        return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
+    }
+
+    sent = sendto(dtls->socket, buf, len, 0,
+                  (struct sockaddr *)&remote_addr, sizeof(remote_addr));
+    if (sent < 0) {
+        return MBEDTLS_ERR_SSL_WANT_WRITE;
+    }
+
+    return sent;
+}
+
+static int dtls_bio_recv(void *ctx, unsigned char *buf, size_t len)
+{
+    dtls_context_t *dtls = (dtls_context_t *)ctx;
+    size_t copy_len;
+
+    if (dtls == NULL) {
+        return MBEDTLS_ERR_SSL_BAD_INPUT_DATA;
+    }
+
+    if (dtls->pending_datagram_len == 0) {
+        return MBEDTLS_ERR_SSL_WANT_READ;
+    }
+
+    /* DTLS is datagram-oriented: deliver at most one complete datagram per
+     * recv callback instead of streaming it across multiple reads. */
+    copy_len = dtls->pending_datagram_len;
+    if (copy_len > len) {
+        copy_len = len;
+    }
+
+    memcpy(buf, dtls->pending_datagram, copy_len);
+    dtls->pending_datagram_len = 0;
+    dtls->pending_datagram_offset = 0;
+
+    return (int)copy_len;
+}
+
+static int dtls_continue_handshake(dtls_context_t *dtls)
+{
+    int ret;
+
+    if (dtls == NULL || dtls->handshake_complete) {
+        return 0;
+    }
+
+    ret = mbedtls_ssl_handshake(dtls->ssl);
+    if (ret == 0) {
+        dtls->handshake_complete = true;
+        TINYRTC_LOG_INFO("dtls: handshake complete");
+        return 0;
+    }
+
+    return ret;
+}
+
+static tinyrtc_error_t dtls_handle_handshake_result(dtls_context_t *dtls, int ret)
+{
+    if (ret == 0 || ret == MBEDTLS_ERR_SSL_WANT_READ || ret == MBEDTLS_ERR_SSL_WANT_WRITE) {
+        return TINYRTC_OK;
+    }
+    if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
+        TINYRTC_LOG_DEBUG("dtls: peer closed connection");
+        return TINYRTC_OK;
+    }
+    if (ret == MBEDTLS_ERR_SSL_HELLO_VERIFY_REQUIRED) {
+        TINYRTC_LOG_INFO("dtls: hello verification requested, role=%d state=%d",
+                         (int)dtls->role,
+                         dtls->ssl != NULL ? dtls->ssl->state : -1);
+        if (dtls->role == DTLS_ROLE_SERVER) {
+            TINYRTC_LOG_INFO("dtls: entering server HelloVerifyRequest recovery path");
+            if (mbedtls_ssl_session_reset(dtls->ssl) != 0) {
+                TINYRTC_LOG_ERROR("dtls: failed to reset server session after HelloVerifyRequest");
+                return TINYRTC_ERROR;
+            }
+            dtls->handshake_complete = false;
+            if (dtls_configure_runtime_io(dtls) != TINYRTC_OK) {
+                TINYRTC_LOG_ERROR("dtls: failed to reconfigure server DTLS I/O after HelloVerifyRequest");
+                return TINYRTC_ERROR;
+            }
+            TINYRTC_LOG_INFO("dtls: server session reset after HelloVerifyRequest, state=%d",
+                             dtls->ssl->state);
+        }
+        return TINYRTC_OK;
+    }
+
+    TINYRTC_LOG_ERROR("dtls: error processing DTLS data: %d", ret);
+    return TINYRTC_ERROR;
+}
+
+static tinyrtc_error_t dtls_configure_runtime_io(dtls_context_t *dtls)
+{
+    TINYRTC_CHECK(dtls != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(dtls->ice != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(dtls->ice->socket >= 0, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(dtls->ice->selected_pair != NULL, TINYRTC_ERROR_INVALID_ARG);
+
+    dtls->socket = dtls->ice->socket;
+    dtls->pending_datagram_len = 0;
+    dtls->pending_datagram_offset = 0;
+    memset(&dtls->timer, 0, sizeof(dtls->timer));
+
+    if (dtls->role == DTLS_ROLE_SERVER && dtls->ice->selected_pair->remote != NULL) {
+        const ice_candidate_internal_t *remote = dtls->ice->selected_pair->remote;
+        unsigned char transport_id[80];
+        int transport_id_len = snprintf((char *)transport_id, sizeof(transport_id),
+                                        "%s:%u", remote->ip, (unsigned)remote->port);
+        if (transport_id_len <= 0 || (size_t)transport_id_len >= sizeof(transport_id)) {
+            TINYRTC_LOG_ERROR("dtls: failed to format client transport id");
+            return TINYRTC_ERROR_INVALID_ARG;
+        }
+        if (mbedtls_ssl_set_client_transport_id(dtls->ssl,
+                                                transport_id,
+                                                (size_t)transport_id_len) != 0) {
+            TINYRTC_LOG_ERROR("dtls: failed to set client transport id");
+            return TINYRTC_ERROR;
+        }
+    }
+
+    mbedtls_ssl_set_bio(dtls->ssl, dtls, dtls_bio_send, dtls_bio_recv, NULL);
+    mbedtls_ssl_set_timer_cb(dtls->ssl, &dtls->timer,
+                             mbedtls_timing_set_delay, mbedtls_timing_get_delay);
+
+    return TINYRTC_OK;
+}
 
 static int dtls_key_export_callback(void *p_expkey,
                                       const unsigned char *ms,
@@ -61,12 +227,12 @@ static int dtls_key_export_callback(void *p_expkey,
 {
     (void)kb; (void)maclen; (void)keylen; (void)ivlen;
 
-    dtls_key_export_ctx_t *ctx = (dtls_key_export_ctx_t *)p_expkey;
+    dtls_context_t *dtls = (dtls_context_t *)p_expkey;
 
     /* We only need the master_secret, 48 bytes for DTLS-SRTP */
-    if (ctx != NULL && ctx->master_secret != NULL) {
-        memcpy(ctx->master_secret, ms, 48);
-        ctx->got_master_secret = true;
+    if (dtls != NULL && ms != NULL) {
+        memcpy(dtls->master_secret, ms, 48);
+        dtls->master_secret_captured = true;
     }
 
     return 0;
@@ -117,6 +283,8 @@ dtls_context_t *dtls_init(dtls_role_t role)
         return NULL;
     }
 
+    int ret;
+
     /* Configure DTLS */
     mbedtls_ssl_config_init(ssl_cfg);
     if (role == DTLS_ROLE_CLIENT) {
@@ -133,13 +301,29 @@ dtls_context_t *dtls_init(dtls_role_t role)
 
     /* Use ECDH key exchange */
     mbedtls_ssl_conf_rng(ssl_cfg, dtls_our_random, &dtls_ctr_drbg);
+    mbedtls_ssl_conf_dbg(ssl_cfg, dtls_mbedtls_debug, dtls);
+    mbedtls_debug_set_threshold(4);
+
+    if (role == DTLS_ROLE_SERVER) {
+        mbedtls_ssl_cookie_init(&dtls->cookie_ctx);
+        ret = mbedtls_ssl_cookie_setup(&dtls->cookie_ctx, dtls_our_random, &dtls_ctr_drbg);
+        if (ret != 0) {
+            TINYRTC_LOG_ERROR("dtls_init: failed to setup DTLS cookies: %d", ret);
+            goto cleanup;
+        }
+        dtls->cookie_initialized = true;
+        mbedtls_ssl_conf_dtls_cookies(ssl_cfg,
+                                      mbedtls_ssl_cookie_write,
+                                      mbedtls_ssl_cookie_check,
+                                      &dtls->cookie_ctx);
+    }
 
     /* Enable certificate verification - in WebRTC we verify via fingerprint out-of-band */
     mbedtls_ssl_conf_authmode(ssl_cfg, MBEDTLS_SSL_VERIFY_NONE);
 
-    /* Set DTLS version - mbedtls uses major version 3 even for DTLS 1.2 */
-    mbedtls_ssl_conf_min_version(ssl_cfg, MBEDTLS_SSL_MAJOR_VERSION_3, 2);
-    mbedtls_ssl_conf_max_version(ssl_cfg, MBEDTLS_SSL_MAJOR_VERSION_3, 2);
+    /* For DTLS, mbedTLS uses minor version 3 for DTLS 1.2 and 2 for DTLS 1.0. */
+    mbedtls_ssl_conf_min_version(ssl_cfg, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
+    mbedtls_ssl_conf_max_version(ssl_cfg, MBEDTLS_SSL_MAJOR_VERSION_3, MBEDTLS_SSL_MINOR_VERSION_3);
 
     /* Configure elliptic curve for ECDHE - just P-256 which is what WebRTC needs */
     static const mbedtls_ecp_group_id curves[] = {
@@ -148,13 +332,8 @@ dtls_context_t *dtls_init(dtls_role_t role)
     };
     mbedtls_ssl_conf_curves(ssl_cfg, curves);
 
-    /* Register key export callback to capture master secret
-     * This is required for mbedtls 3.x compatibility where mbedtls_ssl_export_keys was removed
-     */
-    static dtls_key_export_ctx_t key_export_ctx = {0};
-    key_export_ctx.master_secret = dtls->master_secret;
-    key_export_ctx.got_master_secret = false;
-    mbedtls_ssl_conf_export_keys_cb(ssl_cfg, dtls_key_export_callback, &key_export_ctx);
+    /* Register key export callback to capture the per-session master secret. */
+    mbedtls_ssl_conf_export_keys_cb(ssl_cfg, dtls_key_export_callback, dtls);
     dtls->master_secret_captured = false;
 
     /* Setup SSL */
@@ -175,7 +354,7 @@ dtls_context_t *dtls_init(dtls_role_t role)
         goto cleanup;
     }
 
-    int ret = mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, ec_key, dtls_our_random, &dtls_ctr_drbg);
+    ret = mbedtls_ecp_gen_key(MBEDTLS_ECP_DP_SECP256R1, ec_key, dtls_our_random, &dtls_ctr_drbg);
     if (ret != 0) {
         TINYRTC_LOG_ERROR("dtls_init: failed to generate EC key: %d", ret);
         tinyrtc_free(ec_key);
@@ -237,8 +416,9 @@ dtls_context_t *dtls_init(dtls_role_t role)
         goto cleanup;
     }
 
-    /* Parse the certificate back into mbedtls structure */
-    ret = mbedtls_x509_crt_parse(cert, buf, (size_t)ret);
+    /* mbedtls_x509write_crt_pem() returns 0 on success. PEM parsing expects
+     * the actual string length including the terminating NUL byte. */
+    ret = mbedtls_x509_crt_parse(cert, buf, strlen((const char *)buf) + 1);
     if (ret != 0) {
         TINYRTC_LOG_ERROR("dtls_init: failed to parse generated certificate: %d", ret);
         mbedtls_x509write_crt_free(&crtwrite);
@@ -324,6 +504,9 @@ void dtls_destroy(dtls_context_t *dtls)
     if (dtls->ctx != NULL) {
         mbedtls_ssl_config_free(dtls->ctx);
     }
+    if (dtls->cookie_initialized) {
+        mbedtls_ssl_cookie_free(&dtls->cookie_ctx);
+    }
     tinyrtc_internal_free(dtls);
     TINYRTC_LOG_DEBUG("dtls context destroyed, fingerprint %s", dtls->fingerprint);
 }
@@ -362,39 +545,59 @@ tinyrtc_error_t dtls_process_data(dtls_context_t *dtls,
                                   size_t len)
 {
     TINYRTC_CHECK(dtls != NULL, TINYRTC_ERROR_INVALID_ARG);
+    int ret;
 
-    int ret = mbedtls_ssl_read(dtls->ssl, (unsigned char *)data, (int)len);
-    if (ret > 0) {
-        /* Application data received - we don't expect any before handshake complete */
-        TINYRTC_LOG_DEBUG("dtls: received %d bytes of application data", ret);
-        return TINYRTC_OK;
-    }
-
-    if (ret == MBEDTLS_ERR_SSL_WANT_READ) {
-        return TINYRTC_OK;
-    }
-
-    if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY) {
-        TINYRTC_LOG_DEBUG("dtls: peer closed connection");
-        return TINYRTC_OK;
-    }
-
-    if (ret < 0) {
-        if (ret == MBEDTLS_ERR_SSL_HELLO_VERIFY_REQUIRED) {
-            TINYRTC_LOG_DEBUG("dtls: hello verification requested");
-        } else {
-            TINYRTC_LOG_ERROR("dtls: error processing DTLS data: %d", ret);
-        }
+    if (len > sizeof(dtls->pending_datagram)) {
+        TINYRTC_LOG_ERROR("dtls: incoming datagram too large: %zu", len);
         return TINYRTC_ERROR;
     }
 
-    if (mbedtls_ssl_get_verify_result(dtls->ssl) == 0 &&
-        dtls->ssl->state == MBEDTLS_SSL_HANDSHAKE_OVER) {
-        dtls->handshake_complete = true;
-        TINYRTC_LOG_INFO("dtls: handshake complete");
+    if (len >= 25 && data[0] == 0x16) {
+        uint16_t epoch = (uint16_t)((data[3] << 8) | data[4]);
+        uint64_t seq = ((uint64_t)data[5] << 40) |
+                       ((uint64_t)data[6] << 32) |
+                       ((uint64_t)data[7] << 24) |
+                       ((uint64_t)data[8] << 16) |
+                       ((uint64_t)data[9] << 8) |
+                       (uint64_t)data[10];
+        uint16_t record_len = (uint16_t)((data[11] << 8) | data[12]);
+        uint8_t hs_type = data[13];
+        uint32_t hs_len = ((uint32_t)data[14] << 16) |
+                          ((uint32_t)data[15] << 8) |
+                          (uint32_t)data[16];
+        uint16_t msg_seq = (uint16_t)((data[17] << 8) | data[18]);
+        uint32_t frag_off = ((uint32_t)data[19] << 16) |
+                            ((uint32_t)data[20] << 8) |
+                            (uint32_t)data[21];
+        uint32_t frag_len = ((uint32_t)data[22] << 16) |
+                            ((uint32_t)data[23] << 8) |
+                            (uint32_t)data[24];
+
+        TINYRTC_LOG_INFO(
+            "dtls: incoming handshake record ver=%02x.%02x epoch=%u seq=%llu record_len=%u hs_type=%u hs_len=%u msg_seq=%u frag_off=%u frag_len=%u packet_len=%zu",
+            (unsigned)data[1], (unsigned)data[2], (unsigned)epoch,
+            (unsigned long long)seq, (unsigned)record_len, (unsigned)hs_type,
+            (unsigned)hs_len, (unsigned)msg_seq, (unsigned)frag_off,
+            (unsigned)frag_len, len);
     }
 
-    return TINYRTC_OK;
+    memcpy(dtls->pending_datagram, data, len);
+    dtls->pending_datagram_len = len;
+    dtls->pending_datagram_offset = 0;
+
+    ret = dtls_continue_handshake(dtls);
+    if (ret == MBEDTLS_ERR_SSL_HELLO_VERIFY_REQUIRED && dtls->role == DTLS_ROLE_SERVER) {
+        tinyrtc_error_t handled = dtls_handle_handshake_result(dtls, ret);
+        if (handled != TINYRTC_OK) {
+            return handled;
+        }
+
+        memcpy(dtls->pending_datagram, data, len);
+        dtls->pending_datagram_len = len;
+        dtls->pending_datagram_offset = 0;
+        ret = dtls_continue_handshake(dtls);
+    }
+    return dtls_handle_handshake_result(dtls, ret);
 }
 
 bool dtls_is_handshake_complete(dtls_context_t *dtls)
@@ -406,6 +609,16 @@ bool dtls_is_handshake_complete(dtls_context_t *dtls)
            dtls->ssl->state == MBEDTLS_SSL_HANDSHAKE_OVER;
 }
 
+tinyrtc_error_t dtls_poll_handshake(dtls_context_t *dtls)
+{
+    int ret;
+
+    TINYRTC_CHECK(dtls != NULL, TINYRTC_ERROR_INVALID_ARG);
+
+    ret = dtls_continue_handshake(dtls);
+    return dtls_handle_handshake_result(dtls, ret);
+}
+
 tinyrtc_error_t dtls_derive_srtp_keys(dtls_context_t *dtls,
                                          uint8_t client_key[16],
                                          uint8_t client_salt[14],
@@ -413,6 +626,11 @@ tinyrtc_error_t dtls_derive_srtp_keys(dtls_context_t *dtls,
                                          uint8_t server_salt[14])
 {
     TINYRTC_CHECK(dtls != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(dtls->master_secret_captured, TINYRTC_ERROR_INVALID_STATE);
+    TINYRTC_CHECK(client_key != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(client_salt != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(server_key != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(server_salt != NULL, TINYRTC_ERROR_INVALID_ARG);
 
     /* According to RFC 5764 for DTLS-SRTP key derivation
      * We get the master secret from DTLS and expand it with the correct label to get the 60 bytes we need
@@ -436,12 +654,28 @@ tinyrtc_error_t dtls_derive_srtp_keys(dtls_context_t *dtls,
     mbedtls_sha256_update(&sha_ctx, (const unsigned char *)label, label_len);
     mbedtls_sha256_finish_ret(&sha_ctx, tmp_hash);
 
-    mbedtls_sha256_context sha_ctx2;
-    mbedtls_sha256_init(&sha_ctx2);
-    mbedtls_sha256_starts_ret(&sha_ctx2, 0 /* SHA-256 */);
-    mbedtls_sha256_update(&sha_ctx2, dtls->master_secret, 48);
-    mbedtls_sha256_update(&sha_ctx2, tmp_hash, 32);
-    mbedtls_sha256_finish_ret(&sha_ctx2, output);
+    /* Minimal deterministic expansion for current demo path.
+     * This is not a full RFC 5764 exporter implementation, but it must at
+     * least fill the requested 60 bytes without overrunning the buffer. */
+    for (size_t offset = 0; offset < output_len; offset += 32) {
+        unsigned char block[32];
+        mbedtls_sha256_context sha_ctx2;
+        uint32_t counter = (uint32_t)(offset / 32);
+        size_t block_len = output_len - offset;
+        if (block_len > sizeof(block)) {
+            block_len = sizeof(block);
+        }
+
+        mbedtls_sha256_init(&sha_ctx2);
+        mbedtls_sha256_starts_ret(&sha_ctx2, 0 /* SHA-256 */);
+        mbedtls_sha256_update(&sha_ctx2, dtls->master_secret, 48);
+        mbedtls_sha256_update(&sha_ctx2, tmp_hash, 32);
+        mbedtls_sha256_update(&sha_ctx2, (const unsigned char *)&counter, sizeof(counter));
+        mbedtls_sha256_finish_ret(&sha_ctx2, block);
+        mbedtls_sha256_free(&sha_ctx2);
+
+        memcpy(output + offset, block, block_len);
+    }
 
     /* Split into client and server */
     size_t offset = 0;
@@ -451,9 +685,8 @@ tinyrtc_error_t dtls_derive_srtp_keys(dtls_context_t *dtls,
     offset += 14;
     memcpy(server_key, output + offset, 16);
     offset += 16;
-    memcpy(server_salt, output + offset, 16);
+    memcpy(server_salt, output + offset, 14);
     offset += 16;
-    memcpy(server_salt, output + offset, 16);
 
     /* Store locally */
     memcpy(dtls->client_master_key, client_key, 16);
@@ -479,16 +712,26 @@ bool dtls_get_master_secret(dtls_context_t *dtls, unsigned char *buffer, size_t 
     return true;
 }
 
-tinyrtc_error_t dtls_start(dtls_context_t *dtls, int fd)
+tinyrtc_error_t dtls_start(dtls_context_t *dtls, ice_session_t *ice)
 {
     TINYRTC_CHECK(dtls != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(ice != NULL, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(ice->socket >= 0, TINYRTC_ERROR_INVALID_ARG);
+    TINYRTC_CHECK(ice->selected_pair != NULL, TINYRTC_ERROR_INVALID_ARG);
 
-    dtls->socket = fd;
+    dtls->ice = ice;
+    if (dtls_configure_runtime_io(dtls) != TINYRTC_OK) {
+        return TINYRTC_ERROR;
+    }
 
-    /* We do IO externally so just setup the bio context with null callbacks */
-    mbedtls_ssl_set_bio(dtls->ssl, dtls, (mbedtls_ssl_send_t *)NULL,
-                       (mbedtls_ssl_recv_t *)NULL, (mbedtls_ssl_recv_timeout_t *)NULL);
+    {
+        int ret = dtls_continue_handshake(dtls);
+        if (ret != 0 && ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE) {
+            TINYRTC_LOG_ERROR("dtls: failed to start handshake: %d", ret);
+            return TINYRTC_ERROR;
+        }
+    }
 
-    TINYRTC_LOG_DEBUG("dtls: starting handshake on socket %d", fd);
+    TINYRTC_LOG_DEBUG("dtls: starting handshake on socket %d", ice->socket);
     return TINYRTC_OK;
 }

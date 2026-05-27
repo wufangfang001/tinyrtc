@@ -44,6 +44,7 @@ static int timingsafe_bcmp(const unsigned char *b1, const unsigned char *b2, siz
 static void srtp_derive_key(srtp_context_t *srtp, uint32_t ssrc,
                              uint8_t *output, size_t output_len)
 {
+    TINYRTC_UNUSED(output_len);
     /* SRTP key derivation uses AES encryption of a counter based on SSRC */
     /* We just need the first 16 bytes for AES key */
 
@@ -61,8 +62,10 @@ static void srtp_derive_key(srtp_context_t *srtp, uint32_t ssrc,
 
     /* Encrypt counter with master key to get session key */
     mbedtls_aes_context aes_key;
+    mbedtls_aes_init(&aes_key);
     mbedtls_aes_setkey_enc(&aes_key, srtp->key, 128);
     mbedtls_aes_crypt_ecb(&aes_key, MBEDTLS_AES_ENCRYPT, counter, output);
+    mbedtls_aes_free(&aes_key);
 }
 
 /**
@@ -71,12 +74,17 @@ static void srtp_derive_key(srtp_context_t *srtp, uint32_t ssrc,
 static void srtp_generate_auth(srtp_context_t *srtp, const uint8_t *packet,
                                 size_t packet_len, uint8_t *tag)
 {
+    uint8_t full_tag[20];
     mbedtls_md_context_t md_ctx;
     const mbedtls_md_info_t *md_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
+    mbedtls_md_init(&md_ctx);
+    mbedtls_md_setup(&md_ctx, md_info, 1);
     mbedtls_md_hmac_starts(&md_ctx, srtp->key, 16);
     mbedtls_md_hmac_update(&md_ctx, packet, packet_len);
-    mbedtls_md_hmac_finish(&md_ctx, tag);
-    /* We only use first 10 bytes as specified by WebRTC */
+    mbedtls_md_hmac_finish(&md_ctx, full_tag);
+    mbedtls_md_free(&md_ctx);
+    /* SRTP uses an 80-bit auth tag for the WebRTC profile. */
+    memcpy(tag, full_tag, SRTP_AUTH_TAG_LEN);
 }
 
 /**
@@ -88,9 +96,12 @@ static bool srtp_verify_auth(srtp_context_t *srtp, const uint8_t *packet,
     uint8_t computed[20];
     mbedtls_md_context_t md_ctx;
     const mbedtls_md_info_t *md_info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA1);
+    mbedtls_md_init(&md_ctx);
+    mbedtls_md_setup(&md_ctx, md_info, 1);
     mbedtls_md_hmac_starts(&md_ctx, srtp->key, 16);
     mbedtls_md_hmac_update(&md_ctx, packet, packet_len);
     mbedtls_md_hmac_finish(&md_ctx, computed);
+    mbedtls_md_free(&md_ctx);
 
     /* Compare first 10 bytes */
     return timingsafe_bcmp(computed, tag, SRTP_AUTH_TAG_LEN) == 0;
@@ -167,6 +178,7 @@ tinyrtc_error_t srtp_encrypt_packet(srtp_context_t *srtp,
     size_t payload_len = original_len - header_len;
 
     mbedtls_aes_context aes_key;
+    mbedtls_aes_init(&aes_key);
     mbedtls_aes_setkey_enc(&aes_key, enc_key, 128);
 
     /* AES counter mode encryption */
@@ -200,6 +212,7 @@ tinyrtc_error_t srtp_encrypt_packet(srtp_context_t *srtp,
             }
         }
     }
+    mbedtls_aes_free(&aes_key);
 
     /* Authenticate the entire packet including header */
     /* Append auth tag to the end */
@@ -253,6 +266,7 @@ tinyrtc_error_t srtp_decrypt_packet(srtp_context_t *srtp,
     size_t payload_len = packet_len_without_auth - header_len;
 
     mbedtls_aes_context aes_key;
+    mbedtls_aes_init(&aes_key);
     mbedtls_aes_setkey_enc(&aes_key, dec_key, 128);
 
     uint8_t counter_block[16] = {0};
@@ -282,6 +296,7 @@ tinyrtc_error_t srtp_decrypt_packet(srtp_context_t *srtp,
             }
         }
     }
+    mbedtls_aes_free(&aes_key);
 
     /* Update ROC */
     srtp->roc++;
