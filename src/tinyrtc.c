@@ -242,8 +242,6 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
             } else if (len < 0) {
                 TINYRTC_LOG_ERROR("recv() failed: %s", strerror(errno));
             }
-        } else {
-            TINYRTC_LOG_DEBUG("No data ready on ICE socket fd=%d", pc->ice->socket);
         }
 
         /* Run ICE connectivity checks (send pings, handle timeouts) */
@@ -252,7 +250,6 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
         /* Check if ICE connected and notify state change */
         bool was_connected = pc->state == TINYRTC_PC_STATE_CONNECTED;
         bool is_connected = ice_is_connected(pc->ice);
-        TINYRTC_LOG_DEBUG("Peer %p: ICE check done, connected=%d was_connected=%d", pc, is_connected, was_connected);
         if (!was_connected && is_connected) {
             pc->state = TINYRTC_PC_STATE_CONNECTED;
             /* Start DTLS handshake now that ICE is connected */

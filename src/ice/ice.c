@@ -414,18 +414,9 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
     }
 
     /* Send connectivity check pings to all unchecked pairs */
-    TINYRTC_LOG_DEBUG("ice_check_connectivity: num_check_pairs=%d state=%d", ice->num_check_pairs, ice->state);
-    TINYRTC_LOG_DEBUG("ice_check_connectivity: starting iteration over %d check pairs, state=%d",
-        ice->num_check_pairs, ice->state);
     int sent_this_tick = 0;
     for (int i = 0; i < ice->num_check_pairs; i++) {
         ice_check_pair_t *pair = &ice->check_pairs[i];
-        TINYRTC_LOG_DEBUG("Check pair %d: succeeded=%d last_ping_ms=%lu now=%lu timeout=%lu",
-            i, pair->succeeded, (unsigned long)pair->last_ping_ms, (unsigned long)now,
-            (unsigned long)(ICE_STUN_TIMEOUT_MS * ICE_MAX_RETRIES));
-        TINYRTC_LOG_DEBUG("Check pair %d: succeeded=%d last_ping_ms=%lu -> condition=%d",
-            i, pair->succeeded, (unsigned long)pair->last_ping_ms,
-            (int)(!pair->succeeded && (pair->last_ping_ms == 0 || (now - pair->last_ping_ms) > (uint64_t)(ICE_STUN_TIMEOUT_MS * ICE_MAX_RETRIES))));
         if (!pair->succeeded && (pair->last_ping_ms == 0 ||
             (now - pair->last_ping_ms) > (uint64_t)(ICE_STUN_TIMEOUT_MS * ICE_MAX_RETRIES))) {
 
