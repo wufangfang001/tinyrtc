@@ -128,16 +128,6 @@ For self-signed WSS deployments:
 2. Use `wss://your-server-ip:8766` in the `sdp-transfer` browser demo
 3. Add `--no-verify` to TinyRTC demo commands
 
-### Mode 2: Manual SDP Exchange (Original)
-
-1. Use any browser-side WebRTC test page or your own signaling/debug page to create an SDP offer
-2. Save the offer as `offer.sdp`
-3. On TinyRTC side: run `./tinyrtc_recv --offer offer.sdp` to get `answer.sdp`
-4. Paste the answer back into the browser-side tool
-5. Connection established, you can see video from browser
-
-This manual flow is currently the safer baseline because it avoids the JSON object-shape mismatch in `sdp-transfer`'s stock browser demo.
-
 ## Building
 
 ```bash

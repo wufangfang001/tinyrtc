@@ -6,12 +6,6 @@
  *   ./tinyrtc_recv --room <room-id>
  *   Then open the sdp-transfer browser demo with the same room-id and it will connect automatically
  *
- * Usage with manual signaling (original):
- * 1. Get offer from your browser-side WebRTC SDP tool, save as offer.sdp
- * 2. Run ./tinyrtc_recv --offer offer.sdp to generate answer.sdp
- * 3. Copy answer.sdp back to browser to complete connection
- * 4. Start receiving media frames from browser
- *
  * This demo doesn't include actual decoding/rendering - you need
  * to provide that using platform-specific device capabilities.
  */
@@ -180,12 +174,10 @@ static void print_usage(const char *prog_name)
     printf("  --room <room-id>        Use automatic signaling with specified room ID\n");
     printf("  --server <url>          Signaling server URL (default: ws://localhost:8765)\n");
     printf("  --no-verify             Skip SSL certificate verification (for self-signed certs)\n");
-    printf("  --offer <file>          Use manual mode with offer from file\n");
     printf("\n");
     printf("Examples:\n");
     printf("  Automatic mode: %s --room my-room --server ws://your-server-ip:8765\n", prog_name);
     printf("  Automatic mode (WSS): %s --room my-room --server wss://your-server-ip:8766 --no-verify\n", prog_name);
-    printf("  Manual mode:    %s --offer offer.sdp\n", prog_name);
 }
 
 int main(int argc, char **argv)
@@ -356,53 +348,9 @@ int main(int argc, char **argv)
         }
 
         tinyrtc_signaling_destroy(sig);
-    } else if (argc == 3 && strcmp(argv[1], "--offer") == 0) {
-        /* Manual mode: Read offer from file */
-        char *offer_sdp = demo_read_sdp(argv[2]);
-        if (!offer_sdp) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to read offer from %s\n", argv[2]);
-            goto cleanup;
-        }
-
-        aosl_log(AOSL_LOG_INFO, "Setting remote description from offer...\n");
-        tinyrtc_error_t err = tinyrtc_peer_connection_set_remote_description(pc, offer_sdp);
-        tinyrtc_free(offer_sdp);
-
-        if (err != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to set remote description: %s\n",
-                    tinyrtc_get_error_string(err));
-            goto cleanup;
-        }
-
-        /* Create answer */
-        char *answer_sdp = NULL;
-        err = tinyrtc_peer_connection_create_answer(pc, &answer_sdp);
-        if (err != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to create answer: %s\n",
-                    tinyrtc_get_error_string(err));
-            goto cleanup;
-        }
-
-        int wr = demo_write_sdp("answer.sdp", answer_sdp);
-        if (wr != 0) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to write answer to answer.sdp\n");
-            tinyrtc_free(answer_sdp);
-            goto cleanup;
-        }
-
-        aosl_log(AOSL_LOG_INFO, "Answer generated and saved to answer.sdp\n");
-        aosl_log(AOSL_LOG_INFO, "Copy answer.sdp to your browser-side WebRTC SDP tool to complete connection setup\n");
-        aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
-        tinyrtc_free(answer_sdp);
-
-        while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
-            tinyrtc_process_events(ctx, 10);
-            aosl_msleep(10);
-        }
     } else {
         aosl_log(AOSL_LOG_INFO, "Usage:\n");
         aosl_log(AOSL_LOG_INFO, "  Automatic mode:  %s --room <room-id>\n", argv[0]);
-        aosl_log(AOSL_LOG_INFO, "  Manual mode:     %s --offer <offer.sdp>\n", argv[0]);
         aosl_log(AOSL_LOG_INFO, "\n");
         aosl_log(AOSL_LOG_INFO, "In automatic mode, open the sdp-transfer browser demo with the same room-id\n");
         aosl_log(AOSL_LOG_INFO, "and connection will be established automatically\n");

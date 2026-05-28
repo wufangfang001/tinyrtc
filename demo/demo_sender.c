@@ -6,12 +6,6 @@
  *   ./tinyrtc_send --room <room-id>
  *   Then open the sdp-transfer browser demo with the same room-id and it will connect automatically
  *
- * Usage with manual signaling (original):
- * 1. Run ./tinyrtc_send to generate offer
- * 2. Copy generated offer.sdp to your browser-side WebRTC SDP tool
- * 3. Copy browser answer to answer.sdp
- * 4. Run ./tinyrtc_send --with-answer answer.sdp
- *
  * This demo doesn't include actual video capture/encoding - you need
  * to provide encoded frames from your camera/device.
  */
@@ -80,11 +74,164 @@ static void on_video_frame(void *user_data, tinyrtc_track_t *track,
 
 /* Global for signaling callback */
 static tinyrtc_peer_connection_t *g_pc = NULL;
-static bool g_got_answer = false;
 static bool g_peer_joined = false;
 static bool g_offer_sent = false;
 static tinyrtc_track_t *g_video_track = NULL;
 static tinyrtc_track_t *g_audio_track = NULL;
+
+typedef struct {
+    FILE *video_file;
+    FILE *audio_file;
+    uint32_t video_timestamp;
+    uint32_t audio_timestamp;
+    uint32_t video_inc;
+    uint32_t audio_inc;
+    int audio_frame_size;
+    int frame_count;
+} demo_media_sender_t;
+
+static FILE *demo_open_video_file(const char *video_file_path)
+{
+    FILE *video_file = NULL;
+
+    if (video_file_path) {
+        video_file = fopen(video_file_path, "rb");
+        if (video_file) {
+            aosl_log(AOSL_LOG_INFO, "Using custom video file: %s\n", video_file_path);
+        } else {
+            aosl_log(AOSL_LOG_ERROR, "Failed to open video file: %s\n", video_file_path);
+        }
+        return video_file;
+    }
+
+    video_file = fopen("test.264", "rb");
+    if (!video_file) {
+        video_file = fopen("test_data/test.264", "rb");
+    }
+    if (video_file) {
+        aosl_log(AOSL_LOG_INFO, "Found test.264, will send H.264 video frames\n");
+    }
+
+    return video_file;
+}
+
+static FILE *demo_open_audio_file(const char *audio_file_path, const char *audio_codec_name,
+                                  tinyrtc_codec_id_t audio_codec)
+{
+    char audio_path[512];
+    FILE *audio_file = NULL;
+
+    if (audio_file_path) {
+        audio_file = fopen(audio_file_path, "rb");
+        if (audio_file) {
+            aosl_log(AOSL_LOG_INFO, "Using custom audio file: %s\n", audio_file_path);
+        } else {
+            aosl_log(AOSL_LOG_ERROR, "Failed to open audio file: %s\n", audio_file_path);
+        }
+        return audio_file;
+    }
+
+    snprintf(audio_path, sizeof(audio_path), "send_audio.%s", audio_codec_name);
+    audio_file = fopen(audio_path, "rb");
+
+    if (!audio_file) {
+        snprintf(audio_path, sizeof(audio_path), "test_data/send_audio.%s", audio_codec_name);
+        audio_file = fopen(audio_path, "rb");
+    }
+
+    if (!audio_file) {
+        snprintf(audio_path, sizeof(audio_path),
+                 "/home/ubuntu/agora_rtsa_sdk/example/out/x86_64/send_audio.%s",
+                 audio_codec_name);
+        audio_file = fopen(audio_path, "rb");
+    }
+
+    if (audio_file) {
+        aosl_log(AOSL_LOG_INFO, "Found audio file: %s, will send %s audio frames\n",
+                 audio_path, tinyrtc_codec_get_name(audio_codec));
+    } else {
+        aosl_log(AOSL_LOG_WARNING, "Audio file not found: send_audio.%s\n", audio_codec_name);
+    }
+
+    return audio_file;
+}
+
+static void demo_media_sender_init(demo_media_sender_t *sender, FILE *video_file, FILE *audio_file,
+                                   tinyrtc_codec_id_t audio_codec)
+{
+    memset(sender, 0, sizeof(*sender));
+    sender->video_file = video_file;
+    sender->audio_file = audio_file;
+    sender->video_inc = 90000 / 30;
+    sender->audio_inc = tinyrtc_codec_get_clock_rate(audio_codec) / 50;
+    sender->audio_frame_size = 160;
+}
+
+static void demo_media_sender_tick(demo_media_sender_t *sender, tinyrtc_peer_connection_t *pc)
+{
+    if (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CONNECTED) {
+        return;
+    }
+
+    if (sender->video_file && g_video_track) {
+        uint8_t buffer[1024 * 1024];
+        int pos = 0;
+        int c;
+        int zero_count = 0;
+
+        while ((c = fgetc(sender->video_file)) != EOF) {
+            if (c != 0) {
+                break;
+            }
+            if (pos < (int)sizeof(buffer)) {
+                buffer[pos++] = c;
+            }
+        }
+        if (c == EOF) {
+            rewind(sender->video_file);
+            return;
+        }
+        buffer[pos++] = c;
+
+        while ((c = fgetc(sender->video_file)) != EOF) {
+            if (pos < (int)sizeof(buffer) - 4) {
+                buffer[pos++] = c;
+            }
+            if (c == 0) {
+                zero_count++;
+            } else {
+                if (zero_count >= 3 && c == 1) {
+                    for (int i = 0; i < 4 && pos >= 4; i++) {
+                        ungetc(buffer[--pos], sender->video_file);
+                    }
+                    break;
+                }
+                zero_count = 0;
+            }
+        }
+        if (pos > 0) {
+            tinyrtc_track_send_video_frame(g_video_track, buffer, pos, sender->video_timestamp);
+            sender->video_timestamp += sender->video_inc;
+            sender->frame_count++;
+            if (sender->frame_count % 30 == 1) {
+                aosl_log(AOSL_LOG_INFO, "Sent video frame #%d, size=%d bytes\n",
+                         sender->frame_count, pos);
+            }
+        }
+    }
+
+    if (sender->audio_file && g_audio_track) {
+        uint8_t audio_buffer[512];
+        size_t bytes_read = fread(audio_buffer, 1, sender->audio_frame_size, sender->audio_file);
+        if (bytes_read > 0) {
+            tinyrtc_track_send_audio_frame(g_audio_track, audio_buffer, bytes_read,
+                                           sender->audio_timestamp);
+            sender->audio_timestamp += sender->audio_inc;
+        } else {
+            rewind(sender->audio_file);
+        }
+    }
+}
 
 static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
 {
@@ -100,7 +247,6 @@ static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
                             tinyrtc_get_error_string(err));
                 } else {
                     aosl_log(AOSL_LOG_INFO, "Remote answer set successfully\n");
-                    g_got_answer = true;
                 }
                 // NOTE: sig_process_message already frees event->data.answer after callback, don't free again!
             }
@@ -135,14 +281,12 @@ static void print_usage(const char *prog_name)
     printf("  --server <url>          Signaling server URL (default: ws://localhost:8765)\n");
     printf("  --stun <url>            STUN server URL (e.g., stun:stun.l.google.com:19302)\n");
     printf("  --no-verify             Skip SSL certificate verification (for self-signed certs)\n");
-    printf("  --with-answer <file>    Use manual mode with answer from file\n");
     printf("  --audio-codec <codec>   Audio codec: g722, pcma, pcmu (default: g722)\n");
     printf("  --video-file <path>     Path to H.264 video file (default: test.264)\n");
     printf("  --audio-file <path>     Path to audio file (default: auto-detect based on codec)\n");
     printf("\n");
     printf("Examples:\n");
     printf("  Automatic mode: %s --room my-room --server wss://your-server-ip:8766 --no-verify\n", prog_name);
-    printf("  Manual mode:    %s --with-answer answer.sdp\n", prog_name);
     printf("  With PCMA audio: %s --room my-room --audio-codec pcma\n", prog_name);
     printf("  Custom files:   %s --room my-room --video-file my_video.264 --audio-file my_audio.pcmu\n", prog_name);
 }
@@ -256,93 +400,15 @@ int main(int argc, char **argv)
     g_audio_track = tinyrtc_peer_connection_add_track(pc, &audio_config);
     aosl_log(AOSL_LOG_INFO, "Audio codec set to: %s\n", tinyrtc_codec_get_name(audio_codec));
 
-    /* Check for manual mode with answer from previous step */
-    if (!auto_signaling && argc == 3 && strcmp(argv[1], "--with-answer") == 0) {
-        /* Read answer from file */
-        char *answer_sdp = demo_read_sdp(argv[2]);
-        if (!answer_sdp) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to read answer from %s\n", argv[2]);
-            goto cleanup;
-        }
-
-        aosl_log(AOSL_LOG_INFO, "Setting remote description from answer...\n");
-        tinyrtc_error_t err = tinyrtc_peer_connection_set_remote_description(pc, answer_sdp);
-        tinyrtc_free(answer_sdp);
-
-        if (err != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to set remote description: %s\n", tinyrtc_get_error_string(err));
-            goto cleanup;
-        }
-
-        aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
-        aosl_log(AOSL_LOG_INFO, "In a real application, you would read encoded frames from camera,\n");
-        aosl_log(AOSL_LOG_INFO, "and call tinyrtc_track_send_video_frame() / tinyrtc_track_send_audio_frame() to send.\n");
-
-        while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
-            tinyrtc_process_events(ctx, 100);
-            aosl_msleep(10);
-        }
-    } else if (auto_signaling) {
+    if (auto_signaling) {
         /* Automatic signaling using external sdp-transfer server */
         aosl_log(AOSL_LOG_INFO, "Starting automatic signaling... room=%s server=%s\n",
                 room_id, default_signaling_server);
 
-        /* Open video and audio files before signaling connect */
-        /* Open video file */
-        FILE *video_file = NULL;
-        if (video_file_path) {
-            video_file = fopen(video_file_path, "rb");
-            if (video_file) {
-                aosl_log(AOSL_LOG_INFO, "Using custom video file: %s\n", video_file_path);
-            } else {
-                aosl_log(AOSL_LOG_ERROR, "Failed to open video file: %s\n", video_file_path);
-            }
-        } else {
-            /* Try default video file locations */
-            video_file = fopen("test.264", "rb");
-            if (!video_file) {
-                video_file = fopen("test_data/test.264", "rb");
-            }
-            if (video_file) {
-                aosl_log(AOSL_LOG_INFO, "Found test.264, will send H.264 video frames\n");
-            }
-        }
-
-        /* Open audio file */
-        char audio_path[512];
-        FILE *audio_file = NULL;
-
-        if (audio_file_path) {
-            audio_file = fopen(audio_file_path, "rb");
-            if (audio_file) {
-                aosl_log(AOSL_LOG_INFO, "Using custom audio file: %s\n", audio_file_path);
-            } else {
-                aosl_log(AOSL_LOG_ERROR, "Failed to open audio file: %s\n", audio_file_path);
-            }
-        } else {
-            /* Try to find audio file in standard locations */
-            /* Try current directory first with codec-specific name */
-            snprintf(audio_path, sizeof(audio_path), "send_audio.%s", audio_codec_name);
-            audio_file = fopen(audio_path, "rb");
-
-            /* Try test_data directory */
-            if (!audio_file) {
-                snprintf(audio_path, sizeof(audio_path), "test_data/send_audio.%s", audio_codec_name);
-                audio_file = fopen(audio_path, "rb");
-            }
-
-            /* Try agora_rtsa_sdk directory */
-            if (!audio_file) {
-                snprintf(audio_path, sizeof(audio_path), "/home/ubuntu/agora_rtsa_sdk/example/out/x86_64/send_audio.%s", audio_codec_name);
-                audio_file = fopen(audio_path, "rb");
-            }
-
-            if (audio_file) {
-                aosl_log(AOSL_LOG_INFO, "Found audio file: %s, will send %s audio frames\n", audio_path, tinyrtc_codec_get_name(audio_codec));
-            } else {
-                aosl_log(AOSL_LOG_WARNING, "Audio file not found: send_audio.%s\n", audio_codec_name);
-            }
-        }
+        FILE *video_file = demo_open_video_file(video_file_path);
+        FILE *audio_file = demo_open_audio_file(audio_file_path, audio_codec_name, audio_codec);
+        demo_media_sender_t media_sender;
+        demo_media_sender_init(&media_sender, video_file, audio_file, audio_codec);
 
         aosl_log(AOSL_LOG_INFO, "Starting signaling connect to %s room=%s\n",
                 default_signaling_server, room_id);
@@ -376,20 +442,7 @@ int main(int argc, char **argv)
         char *offer_sdp = NULL;
         aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
 
-        /* Calculate timestamp increment for 30fps video */
-        uint32_t video_timestamp = 0;
-        uint32_t audio_timestamp = 0;
-        const uint32_t video_inc = 90000 / 30;  /* 90kHz clock, 30fps */
-        /* G.711/G.722 send 20ms frames */
-        /* Note: G722 actual sampling rate is 16kHz, RTP clock rate is 8kHz per RFC 3551 */
-        const uint32_t audio_clock_rate = tinyrtc_codec_get_clock_rate(audio_codec);
-        const uint32_t audio_inc = audio_clock_rate / 50;  /* 20ms = 50 packets/sec */
-        const int audio_frame_size = 160;  /* 160 bytes per 20ms frame for G711/G722 (64kbps) */
-
-        /* Main loop: poll signaling and process TinyRTC events */
-        int frame_count = 0;
         while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
-            /* Process signaling messages */
             tinyrtc_process_events(ctx, 100);
             tinyrtc_signaling_process(sig);
 
@@ -419,68 +472,7 @@ int main(int argc, char **argv)
                 aosl_log(AOSL_LOG_INFO, "Offer sent. Waiting for answer...\n");
             }
 
-            /* If connected and we have a video file, send next NAL unit (frame) */
-            if (tinyrtc_peer_connection_get_state(pc) == TINYRTC_PC_STATE_CONNECTED &&
-                video_file && g_video_track) {
-                /* Read one NAL unit (H.264 frame) - simple byte-by-byte scan for start code */
-                uint8_t buffer[1024 * 1024];  /* 1MB max frame size */
-                int pos = 0;
-                int c;
-                /* Skip any leading 0x00 */
-                while ((c = fgetc(video_file)) != EOF) {
-                    if (c != 0) break;
-                    if (pos < (int)sizeof(buffer)) {
-                        buffer[pos++] = c;
-                    }
-                }
-                if (c == EOF) {
-                    /* End of file, rewind */
-                    rewind(video_file);
-                    continue;
-                }
-                buffer[pos++] = c;
-                /* Read until next start code (0x00 00 00 01) or EOF */
-                int zero_count = 0;
-                while ((c = fgetc(video_file)) != EOF) {
-                    if (pos < (int)sizeof(buffer) - 4) {
-                        buffer[pos++] = c;
-                    }
-                    if (c == 0) {
-                        zero_count++;
-                    } else {
-                        if (zero_count >= 3 && c == 1) {
-                            /* Found next start code - ungetc the last 4 bytes */
-                            for (int i = 0; i < 4 && pos >= 4; i++) {
-                                ungetc(buffer[--pos], video_file);
-                            }
-                            break;
-                        }
-                        zero_count = 0;
-                    }
-                }
-                if (pos > 0) {
-                    tinyrtc_track_send_video_frame(g_video_track, buffer, pos, video_timestamp);
-                    video_timestamp += video_inc;
-                    frame_count++;
-                    if (frame_count % 30 == 1) {
-                        aosl_log(AOSL_LOG_INFO, "Sent video frame #%d, size=%d bytes\n", frame_count, pos);
-                    }
-                }
-            }
-
-            /* Send audio frames from file if available */
-            if (tinyrtc_peer_connection_get_state(pc) == TINYRTC_PC_STATE_CONNECTED &&
-                audio_file && g_audio_track) {
-                uint8_t audio_buffer[512];
-                size_t bytes_read = fread(audio_buffer, 1, audio_frame_size, audio_file);
-                if (bytes_read > 0) {
-                    tinyrtc_track_send_audio_frame(g_audio_track, audio_buffer, bytes_read, audio_timestamp);
-                    audio_timestamp += audio_inc;
-                } else {
-                    /* End of file, rewind */
-                    rewind(audio_file);
-                }
-            }
+            demo_media_sender_tick(&media_sender, pc);
 
             tinyrtc_process_events(ctx, 100);
             aosl_msleep(20);  /* 20ms interval for audio (50 fps) */
@@ -494,31 +486,8 @@ int main(int argc, char **argv)
         }
         tinyrtc_signaling_destroy(sig);
     } else {
-        /* Manual mode: Create offer and write to file */
-        char *offer_sdp = NULL;
-        tinyrtc_error_t err = tinyrtc_peer_connection_create_offer(pc, &offer_sdp);
-        if (err != TINYRTC_OK) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to create offer: %s\n", tinyrtc_get_error_string(err));
-            goto cleanup;
-        }
-
-        int wr = demo_write_sdp("offer.sdp", offer_sdp);
-        if (wr != 0) {
-            aosl_log(AOSL_LOG_ERROR, "Failed to write offer to offer.sdp\n");
-            tinyrtc_free(offer_sdp);
-            goto cleanup;
-        }
-
-        aosl_log(AOSL_LOG_INFO, "Offer generated and saved to offer.sdp\n");
-        aosl_log(AOSL_LOG_INFO, "Next step (manual mode):\n");
-        aosl_log(AOSL_LOG_INFO, "  1. Open your browser-side WebRTC SDP tool or the sdp-transfer demo\n");
-        aosl_log(AOSL_LOG_INFO, "  2. Paste offer.sdp content into browser\n");
-        aosl_log(AOSL_LOG_INFO, "  3. Copy the generated answer from browser to answer.sdp\n");
-        aosl_log(AOSL_LOG_INFO, "  4. Run: %s --with-answer answer.sdp\n", argv[0]);
-        aosl_log(AOSL_LOG_INFO, "\n");
-        aosl_log(AOSL_LOG_INFO, "Or use automatic mode:\n");
-        aosl_log(AOSL_LOG_INFO, "  %s --room %s  (connects via configured signaling server)\n", argv[0], room_id);
-        tinyrtc_free(offer_sdp);
+        aosl_log(AOSL_LOG_ERROR, "Manual SDP exchange has been removed. Use sdp-transfer automatic signaling with --room/--server.\n");
+        goto cleanup;
     }
 
 cleanup:

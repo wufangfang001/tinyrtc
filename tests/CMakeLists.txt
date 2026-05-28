@@ -28,3 +28,11 @@ target_include_directories(tinyrtc_tests PRIVATE
 
 # Register with CTest
 add_test(NAME tinyrtc_tests COMMAND tinyrtc_tests)
+
+add_test(
+    NAME tinyrtc_demo_help_omits_manual_sdp_flags
+    COMMAND
+        ${CMAKE_CURRENT_SOURCE_DIR}/demo_help_omits_manual_sdp_flags.sh
+        $<TARGET_FILE:tinyrtc_send>
+        $<TARGET_FILE:tinyrtc_recv>
+)
