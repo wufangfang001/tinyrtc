@@ -28,7 +28,7 @@
 
 **修复方案**：
 1. 在 README、`docs/signaling.md` 和源码注释中显式记录这一限制
-2. Demo 层统一只保留 `sdp-transfer` 自动信令路径，不再保留手工 SDP 入口
+2. Demo 层统一只保留 `sdp-transfer` 自动信令路径，移除旧的文件式交换入口
 3. 后续如要打通 `sdp-transfer` 自带 browser demo，需要补齐对象形态解析和完整 ICE candidate 处理
 
 **状态**：✅ 已记录，待代码层修复

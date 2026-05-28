@@ -30,9 +30,16 @@ target_include_directories(tinyrtc_tests PRIVATE
 add_test(NAME tinyrtc_tests COMMAND tinyrtc_tests)
 
 add_test(
-    NAME tinyrtc_demo_help_omits_manual_sdp_flags
+    NAME tinyrtc_demo_help_matches_auto_signaling
     COMMAND
-        ${CMAKE_CURRENT_SOURCE_DIR}/demo_help_omits_manual_sdp_flags.sh
+        ${CMAKE_CURRENT_SOURCE_DIR}/demo_help_matches_auto_signaling.sh
         $<TARGET_FILE:tinyrtc_send>
         $<TARGET_FILE:tinyrtc_recv>
+)
+
+add_test(
+    NAME tinyrtc_docs_match_auto_signaling_only
+    COMMAND
+        ${CMAKE_CURRENT_SOURCE_DIR}/docs_match_auto_signaling_only.sh
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
 )
