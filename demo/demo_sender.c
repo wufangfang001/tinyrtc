@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 static void on_ice_candidate(void *user_data, tinyrtc_ice_candidate_t *candidate) {
     aosl_log(AOSL_LOG_INFO, "Got local ICE candidate: %s:%d type=%s\n",
@@ -78,9 +79,11 @@ static bool g_peer_joined = false;
 static bool g_offer_sent = false;
 static tinyrtc_track_t *g_video_track = NULL;
 static tinyrtc_track_t *g_audio_track = NULL;
+static int g_max_video_frames = 0;
+static bool g_should_exit = false;
 
 typedef struct {
-    FILE *video_file;
+    demo_h264_stream_t video_stream;
     FILE *audio_file;
     uint32_t video_timestamp;
     uint32_t audio_timestamp;
@@ -113,6 +116,25 @@ static FILE *demo_open_video_file(const char *video_file_path)
     }
 
     return video_file;
+}
+
+static const char *demo_resolve_video_stream_path(const char *video_file_path)
+{
+    if (video_file_path != NULL) {
+        return video_file_path;
+    }
+
+    if (access("test.264", R_OK) == 0) {
+        return "test.264";
+    }
+    if (access("test_data/test.264", R_OK) == 0) {
+        return "test_data/test.264";
+    }
+    if (access("/mnt/d/workspace/codex/tinyrtc/test_data/test.264", R_OK) == 0) {
+        return "/mnt/d/workspace/codex/tinyrtc/test_data/test.264";
+    }
+
+    return NULL;
 }
 
 static FILE *demo_open_audio_file(const char *audio_file_path, const char *audio_codec_name,
@@ -156,11 +178,10 @@ static FILE *demo_open_audio_file(const char *audio_file_path, const char *audio
     return audio_file;
 }
 
-static void demo_media_sender_init(demo_media_sender_t *sender, FILE *video_file, FILE *audio_file,
+static void demo_media_sender_init(demo_media_sender_t *sender, FILE *audio_file,
                                    tinyrtc_codec_id_t audio_codec)
 {
     memset(sender, 0, sizeof(*sender));
-    sender->video_file = video_file;
     sender->audio_file = audio_file;
     sender->video_inc = 90000 / 30;
     sender->audio_inc = tinyrtc_codec_get_clock_rate(audio_codec) / 50;
@@ -173,59 +194,42 @@ static void demo_media_sender_tick(demo_media_sender_t *sender, tinyrtc_peer_con
         return;
     }
 
-    if (sender->video_file && g_video_track) {
-        uint8_t buffer[1024 * 1024];
-        int pos = 0;
-        int c;
-        int zero_count = 0;
-
-        while ((c = fgetc(sender->video_file)) != EOF) {
-            if (c != 0) {
-                break;
-            }
-            if (pos < (int)sizeof(buffer)) {
-                buffer[pos++] = c;
-            }
-        }
-        if (c == EOF) {
-            rewind(sender->video_file);
+    if (sender->video_stream.count > 0 && g_video_track) {
+        demo_h264_access_unit_t *unit = &sender->video_stream.units[sender->video_stream.current_index];
+        tinyrtc_error_t send_err = tinyrtc_track_send_video_frame(
+            g_video_track, unit->data, unit->len, sender->video_timestamp);
+        if (send_err != TINYRTC_OK) {
             return;
         }
-        buffer[pos++] = c;
 
-        while ((c = fgetc(sender->video_file)) != EOF) {
-            if (pos < (int)sizeof(buffer) - 4) {
-                buffer[pos++] = c;
-            }
-            if (c == 0) {
-                zero_count++;
-            } else {
-                if (zero_count >= 3 && c == 1) {
-                    for (int i = 0; i < 4 && pos >= 4; i++) {
-                        ungetc(buffer[--pos], sender->video_file);
-                    }
-                    break;
-                }
-                zero_count = 0;
-            }
+        sender->video_timestamp += sender->video_inc;
+        sender->frame_count++;
+        sender->video_stream.current_index++;
+        if (sender->video_stream.current_index >= sender->video_stream.count) {
+            sender->video_stream.current_index = 0;
         }
-        if (pos > 0) {
-            tinyrtc_track_send_video_frame(g_video_track, buffer, pos, sender->video_timestamp);
-            sender->video_timestamp += sender->video_inc;
-            sender->frame_count++;
-            if (sender->frame_count % 30 == 1) {
-                aosl_log(AOSL_LOG_INFO, "Sent video frame #%d, size=%d bytes\n",
-                         sender->frame_count, pos);
-            }
+        if (sender->frame_count % 30 == 1) {
+            aosl_log(AOSL_LOG_INFO, "Sent video frame #%d, size=%zu bytes\n",
+                     sender->frame_count, unit->len);
+        }
+        if (g_max_video_frames > 0 && sender->frame_count >= g_max_video_frames) {
+            g_should_exit = true;
         }
     }
 
     if (sender->audio_file && g_audio_track) {
         uint8_t audio_buffer[512];
+        long file_pos = ftell(sender->audio_file);
         size_t bytes_read = fread(audio_buffer, 1, sender->audio_frame_size, sender->audio_file);
         if (bytes_read > 0) {
-            tinyrtc_track_send_audio_frame(g_audio_track, audio_buffer, bytes_read,
-                                           sender->audio_timestamp);
+            tinyrtc_error_t send_err = tinyrtc_track_send_audio_frame(
+                g_audio_track, audio_buffer, bytes_read, sender->audio_timestamp);
+            if (send_err != TINYRTC_OK) {
+                if (file_pos >= 0) {
+                    fseek(sender->audio_file, file_pos, SEEK_SET);
+                }
+                return;
+            }
             sender->audio_timestamp += sender->audio_inc;
         } else {
             rewind(sender->audio_file);
@@ -284,6 +288,7 @@ static void print_usage(const char *prog_name)
     printf("  --audio-codec <codec>   Audio codec: g722, pcma, pcmu (default: g722)\n");
     printf("  --video-file <path>     Path to H.264 video file (default: test.264)\n");
     printf("  --audio-file <path>     Path to audio file (default: auto-detect based on codec)\n");
+    printf("  --max-video-frames <count>  Exit after sending the given number of video frames\n");
     printf("\n");
     printf("Examples:\n");
     printf("  Automatic mode: %s --room my-room --server wss://your-server-ip:8766 --no-verify\n", prog_name);
@@ -322,6 +327,10 @@ int main(int argc, char **argv)
         }
         if (strcmp(argv[i], "--audio-file") == 0 && i + 1 < argc) {
             audio_file_path = argv[i+1];
+            i++;
+        }
+        if (strcmp(argv[i], "--max-video-frames") == 0 && i + 1 < argc) {
+            g_max_video_frames = atoi(argv[i+1]);
             i++;
         }
         if (strcmp(argv[i], "--audio-codec") == 0 && i + 1 < argc) {
@@ -408,7 +417,21 @@ int main(int argc, char **argv)
         FILE *video_file = demo_open_video_file(video_file_path);
         FILE *audio_file = demo_open_audio_file(audio_file_path, audio_codec_name, audio_codec);
         demo_media_sender_t media_sender;
-        demo_media_sender_init(&media_sender, video_file, audio_file, audio_codec);
+        const char *resolved_video_path = demo_resolve_video_stream_path(video_file_path);
+        demo_media_sender_init(&media_sender, audio_file, audio_codec);
+
+        if (video_file != NULL) {
+            fclose(video_file);
+            video_file = NULL;
+        }
+
+        if (resolved_video_path == NULL ||
+            demo_h264_stream_load(resolved_video_path, &media_sender.video_stream) != 0) {
+            aosl_log(AOSL_LOG_ERROR, "Failed to parse H.264 stream: %s\n",
+                     resolved_video_path ? resolved_video_path : "(null)");
+            if (audio_file) fclose(audio_file);
+            goto cleanup;
+        }
 
         aosl_log(AOSL_LOG_INFO, "Starting signaling connect to %s room=%s\n",
                 default_signaling_server, room_id);
@@ -442,7 +465,7 @@ int main(int argc, char **argv)
         char *offer_sdp = NULL;
         aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
 
-        while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
+        while (!g_should_exit && tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
             tinyrtc_process_events(ctx, 100);
             tinyrtc_signaling_process(sig);
 
@@ -478,8 +501,8 @@ int main(int argc, char **argv)
             aosl_msleep(20);  /* 20ms interval for audio (50 fps) */
         }
 
-        if (video_file) fclose(video_file);
         if (audio_file) fclose(audio_file);
+        demo_h264_stream_free(&media_sender.video_stream);
 
         if (offer_sdp) {
             tinyrtc_free(offer_sdp);

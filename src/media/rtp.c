@@ -696,6 +696,94 @@ uint32_t tinyrtc_jitter_buffer_get_delay(tinyrtc_jitter_buffer_t *jb)
  * Frame packetization for common codecs
  * ========================================================================== */
 
+#define H264_NALU_TYPE_STAP_A 24
+#define H264_NALU_TYPE_FU_A   28
+
+static size_t h264_start_code_len(const uint8_t *data, size_t len)
+{
+    if (len >= 4 &&
+        data[0] == 0x00 && data[1] == 0x00 &&
+        data[2] == 0x00 && data[3] == 0x01) {
+        return 4;
+    }
+
+    if (len >= 3 &&
+        data[0] == 0x00 && data[1] == 0x00 &&
+        data[2] == 0x01) {
+        return 3;
+    }
+
+    return 0;
+}
+
+static size_t h264_find_start_code(const uint8_t *data, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        if (h264_start_code_len(data + i, len - i) != 0) {
+            return i;
+        }
+    }
+
+    return len;
+}
+
+static int h264_packetize_nalu(
+    const uint8_t *nalu,
+    size_t nalu_len,
+    size_t max_payload,
+    bool is_last_nalu,
+    tinyrtc_packet_callback_t callback,
+    void *user_data)
+{
+    int packets = 0;
+
+    if (nalu_len == 0) {
+        return 0;
+    }
+
+    if (nalu_len <= max_payload) {
+        callback(nalu, nalu_len, is_last_nalu, user_data);
+        return 1;
+    }
+
+    if (max_payload <= 2 || nalu_len <= 1) {
+        TINYRTC_LOG_ERROR("packetize: invalid H264 payload sizing");
+        return 0;
+    }
+
+    size_t fragment_payload = max_payload - 2;
+    uint8_t *fua_payload = (uint8_t *)tinyrtc_malloc(max_payload);
+    if (fua_payload == NULL) {
+        TINYRTC_LOG_ERROR("packetize: out of memory for H264 FU-A");
+        return 0;
+    }
+
+    uint8_t nalu_header = nalu[0];
+    const uint8_t *nalu_data = nalu + 1;
+    size_t remaining = nalu_len - 1;
+    size_t offset = 0;
+
+    while (remaining > 0) {
+        size_t chunk = TINYRTC_MIN(remaining, fragment_payload);
+        bool is_start = (offset == 0);
+        bool is_end = (chunk == remaining);
+
+        fua_payload[0] = (uint8_t)((nalu_header & 0xE0) | H264_NALU_TYPE_FU_A);
+        fua_payload[1] = (uint8_t)((is_start ? 0x80 : 0x00) |
+                                   (is_end ? 0x40 : 0x00) |
+                                   (nalu_header & 0x1F));
+        memcpy(fua_payload + 2, nalu_data + offset, chunk);
+
+        callback(fua_payload, chunk + 2, is_last_nalu && is_end, user_data);
+        packets++;
+        offset += chunk;
+        remaining -= chunk;
+    }
+
+    tinyrtc_internal_free(fua_payload);
+    return packets;
+}
+
 int tinyrtc_packetize_frame(
     const uint8_t *frame,
     size_t frame_len,
@@ -714,18 +802,57 @@ int tinyrtc_packetize_frame(
 
     /* Maximum payload per packet = MTU - minimum RTP header (12 bytes) */
     size_t max_payload = params->mtu - 12;
-    size_t offset = 0;
     int packets = 0;
 
-    /* For simple packetization, just chunk it into MTU-sized blocks */
-    while (offset < frame_len) {
+    if (params->codec_id == TINYRTC_CODEC_H264) {
+        size_t initial_start_code = h264_start_code_len(frame, frame_len);
+
+        if (initial_start_code != 0) {
+            size_t offset = initial_start_code;
+
+            while (offset < frame_len) {
+                size_t next_start = h264_find_start_code(frame + offset, frame_len - offset);
+                size_t nalu_len = (next_start == frame_len - offset) ? (frame_len - offset) : next_start;
+                size_t next_start_code = 0;
+                bool is_last_nalu = true;
+
+                if (nalu_len == 0) {
+                    next_start_code = h264_start_code_len(frame + offset + next_start,
+                                                          frame_len - offset - next_start);
+                    offset += next_start + next_start_code;
+                    continue;
+                }
+
+                if (next_start != frame_len - offset) {
+                    next_start_code = h264_start_code_len(frame + offset + next_start,
+                                                          frame_len - offset - next_start);
+                    is_last_nalu = false;
+                }
+
+                packets += h264_packetize_nalu(frame + offset, nalu_len, max_payload,
+                                               is_last_nalu, callback, user_data);
+
+                if (next_start == frame_len - offset) {
+                    break;
+                }
+
+                offset += next_start + next_start_code;
+            }
+
+            return packets;
+        }
+
+        return h264_packetize_nalu(frame, frame_len, max_payload, true, callback, user_data);
+    }
+
+    /* Generic packetization: split into MTU-sized chunks and mark only the last. */
+    for (size_t offset = 0; offset < frame_len; ) {
         size_t chunk_len = frame_len - offset;
         if (chunk_len > max_payload) {
             chunk_len = max_payload;
         }
 
-        /* Callback with the chunk - caller adds RTP header */
-        callback(frame + offset, chunk_len, user_data);
+        callback(frame + offset, chunk_len, offset + chunk_len == frame_len, user_data);
         offset += chunk_len;
         packets++;
     }
@@ -734,6 +861,7 @@ int tinyrtc_packetize_frame(
 }
 
 bool tinyrtc_depacketize_frame(
+    tinyrtc_codec_id_t codec_id,
     const uint8_t *packet,
     size_t len,
     uint8_t *frame_buffer,
@@ -747,6 +875,7 @@ bool tinyrtc_depacketize_frame(
     TINYRTC_CHECK_NULL(packet);
     TINYRTC_CHECK_NULL(frame_buffer);
     TINYRTC_CHECK_NULL(frame_len);
+    *frame_len = 0;
 
     /* Parse RTP header to get to payload */
     tinyrtc_rtp_header_t header;
@@ -760,6 +889,64 @@ bool tinyrtc_depacketize_frame(
     }
 
     size_t payload_len = len - (size_t)(payload - packet);
+
+    if (codec_id == TINYRTC_CODEC_H264) {
+        if (payload_len == 0) {
+            return false;
+        }
+
+        uint8_t nalu_type = payload[0] & 0x1F;
+        if (nalu_type > 0 && nalu_type < H264_NALU_TYPE_STAP_A) {
+            if (payload_len + 4 > max_len) {
+                TINYRTC_LOG_DEBUG("depacketize: H264 NALU too large for frame buffer");
+                return false;
+            }
+            frame_buffer[0] = 0x00;
+            frame_buffer[1] = 0x00;
+            frame_buffer[2] = 0x00;
+            frame_buffer[3] = 0x01;
+            memcpy(frame_buffer + 4, payload, payload_len);
+            *frame_len = payload_len + 4;
+            return header.marker;
+        }
+
+        if (nalu_type == H264_NALU_TYPE_FU_A) {
+            if (payload_len < 2) {
+                return false;
+            }
+
+            uint8_t fu_header = payload[1];
+            bool is_start = (fu_header & 0x80) != 0;
+            bool is_end = (fu_header & 0x40) != 0;
+            size_t fragment_len = payload_len - 2;
+
+            if (is_start) {
+                if (fragment_len + 5 > max_len) {
+                    TINYRTC_LOG_DEBUG("depacketize: H264 FU-A start too large for frame buffer");
+                    return false;
+                }
+                frame_buffer[0] = 0x00;
+                frame_buffer[1] = 0x00;
+                frame_buffer[2] = 0x00;
+                frame_buffer[3] = 0x01;
+                frame_buffer[4] = (uint8_t)((payload[0] & 0xE0) | (fu_header & 0x1F));
+                memcpy(frame_buffer + 5, payload + 2, fragment_len);
+                *frame_len = fragment_len + 5;
+            } else {
+                if (fragment_len > max_len) {
+                    TINYRTC_LOG_DEBUG("depacketize: H264 FU-A fragment too large for frame buffer");
+                    return false;
+                }
+                memcpy(frame_buffer, payload + 2, fragment_len);
+                *frame_len = fragment_len;
+            }
+
+            return header.marker || is_end;
+        }
+
+        TINYRTC_LOG_DEBUG("depacketize: unsupported H264 packetization type %u", nalu_type);
+        return false;
+    }
 
     if (payload_len > max_len) {
         TINYRTC_LOG_DEBUG("depacketize: payload too large for frame buffer");

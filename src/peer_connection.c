@@ -29,6 +29,50 @@
  * Public API implementation - Creation/Destruction
  * ========================================================================== */
 
+static void track_reset_reassembly(tinyrtc_track_t *track)
+{
+    if (track == NULL) {
+        return;
+    }
+
+    track->reassembly_len = 0;
+    track->reassembly_timestamp = 0;
+    track->reassembly_active = false;
+}
+
+static bool track_append_reassembly(tinyrtc_track_t *track, const uint8_t *data, size_t len)
+{
+    uint8_t *new_buffer;
+    size_t new_capacity;
+
+    if (len == 0) {
+        return true;
+    }
+
+    if (track->reassembly_len + len <= track->reassembly_capacity) {
+        memcpy(track->reassembly_buffer + track->reassembly_len, data, len);
+        track->reassembly_len += len;
+        return true;
+    }
+
+    new_capacity = track->reassembly_capacity == 0 ? 4096 : track->reassembly_capacity;
+    while (new_capacity < track->reassembly_len + len) {
+        new_capacity *= 2;
+    }
+
+    new_buffer = (uint8_t *)aosl_realloc(track->reassembly_buffer, new_capacity);
+    if (new_buffer == NULL) {
+        TINYRTC_LOG_ERROR("track_append_reassembly: out of memory");
+        return false;
+    }
+
+    track->reassembly_buffer = new_buffer;
+    track->reassembly_capacity = new_capacity;
+    memcpy(track->reassembly_buffer + track->reassembly_len, data, len);
+    track->reassembly_len += len;
+    return true;
+}
+
 tinyrtc_peer_connection_t *tinyrtc_peer_connection_create(
     tinyrtc_context_t *ctx,
     const tinyrtc_pc_config_t *config)
@@ -106,7 +150,21 @@ void tinyrtc_peer_connection_destroy(tinyrtc_peer_connection_t *pc)
         if (pc->remote_tracks[i]->jitter_buffer != NULL) {
             tinyrtc_jitter_buffer_destroy(pc->remote_tracks[i]->jitter_buffer);
         }
+        tinyrtc_internal_free(pc->remote_tracks[i]->reassembly_buffer);
         tinyrtc_internal_free(pc->remote_tracks[i]);
+    }
+
+    if (pc->srtp != NULL) {
+        srtp_destroy(pc->srtp);
+    }
+    if (pc->srtp_rx != NULL) {
+        srtp_destroy(pc->srtp_rx);
+    }
+    if (pc->dtls != NULL) {
+        dtls_destroy(pc->dtls);
+    }
+    if (pc->ice != NULL) {
+        ice_session_destroy(pc->ice);
     }
 
     /* Destroy mutex */
@@ -448,6 +506,11 @@ tinyrtc_error_t tinyrtc_peer_connection_set_remote_description(
             tinyrtc_internal_free(track);
             continue;
         }
+        track->reassembly_buffer = NULL;
+        track->reassembly_len = 0;
+        track->reassembly_capacity = 0;
+        track->reassembly_timestamp = 0;
+        track->reassembly_active = false;
 
         track->packets_received = 0;
         track->frames_received = 0;
@@ -662,6 +725,9 @@ tinyrtc_error_t tinyrtc_peer_connection_add_ice_candidate(
  * Public API implementation - Media send
  * ========================================================================== */
 
+#define TINYRTC_SEND_MTU 1500U
+#define TINYRTC_SRTP_AUTH_TAG_RESERVED 10U
+
 /* Helper structure for packetization callback */
 typedef struct {
     tinyrtc_track_t *track;
@@ -674,6 +740,7 @@ typedef struct {
 static void packetize_send_callback(
     const uint8_t *payload,
     size_t payload_len,
+    bool marker,
     void *user_data)
 {
     packetize_context_t *ctx = (packetize_context_t *)user_data;
@@ -686,7 +753,8 @@ static void packetize_send_callback(
     header.version = 2;
     header.padding = false;
     header.extension = false;
-    header.marker = (payload_len > 0); /* Mark last packet with marker bit */
+    header.csrc_count = 0;
+    header.marker = marker;
     header.payload_type = (uint8_t)track->payload_type;
     header.sequence = ctx->sequence++;
     header.timestamp = ctx->timestamp;
@@ -761,10 +829,15 @@ tinyrtc_error_t tinyrtc_track_send_audio_frame(
         return TINYRTC_ERROR_INVALID_STATE;
     }
 
-    /* Packetization parameters - MTU 1500 */
+    if (!pc_is_secure_media_ready(track->pc)) {
+        return TINYRTC_ERROR_INVALID_STATE;
+    }
+
+    /* Reserve SRTP auth tag space so encrypted packets stay within the buffer. */
     tinyrtc_codec_packetization_t params;
+    params.codec_id = track->codec_id;
     params.payload_type = track->payload_type;
-    params.mtu = 1500;
+    params.mtu = TINYRTC_SEND_MTU - TINYRTC_SRTP_AUTH_TAG_RESERVED;
 
     packetize_context_t cb_ctx;
     cb_ctx.track = track;
@@ -798,10 +871,15 @@ tinyrtc_error_t tinyrtc_track_send_video_frame(
         return TINYRTC_ERROR_INVALID_STATE;
     }
 
-    /* Packetization parameters - MTU 1500 */
+    if (!pc_is_secure_media_ready(track->pc)) {
+        return TINYRTC_ERROR_INVALID_STATE;
+    }
+
+    /* Reserve SRTP auth tag space so encrypted packets stay within the buffer. */
     tinyrtc_codec_packetization_t params;
+    params.codec_id = track->codec_id;
     params.payload_type = track->payload_type;
-    params.mtu = 1500;
+    params.mtu = TINYRTC_SEND_MTU - TINYRTC_SRTP_AUTH_TAG_RESERVED;
 
     packetize_context_t cb_ctx;
     cb_ctx.track = track;
@@ -828,11 +906,20 @@ tinyrtc_error_t tinyrtc_track_send_video_frame(
 
 tinyrtc_error_t pc_process_incoming_rtp(
     tinyrtc_peer_connection_t *pc,
-    const uint8_t *packet,
+    uint8_t *packet,
     size_t len)
 {
     TINYRTC_CHECK(pc != NULL, TINYRTC_ERROR_INVALID_ARG);
     TINYRTC_CHECK(packet != NULL, TINYRTC_ERROR_INVALID_ARG);
+
+    if (pc->srtp_rx != NULL) {
+        size_t output_len = 0;
+        tinyrtc_error_t decrypt_err = srtp_decrypt_packet(pc->srtp_rx, packet, len, &output_len);
+        if (decrypt_err != TINYRTC_OK) {
+            return decrypt_err;
+        }
+        len = output_len;
+    }
 
     /* Parse RTP header */
     tinyrtc_rtp_header_t header;
@@ -856,7 +943,7 @@ tinyrtc_error_t pc_process_incoming_rtp(
 
     if (matched == NULL) {
         TINYRTC_LOG_DEBUG("pc_process_incoming_rtp: no track for payload type %d",
-            (int)header.payload_type);
+                          (int)header.payload_type);
         return TINYRTC_ERROR_NOT_FOUND;
     }
 
@@ -873,18 +960,40 @@ tinyrtc_error_t pc_process_incoming_rtp(
     /* Try to get a complete frame from jitter buffer
      * For simplicity, we depacketize directly since one RTP = one frame for many cases
      */
-    uint8_t frame_buffer[4096]; /* 4KB max for now */
-    size_t frame_len;
-    const uint8_t *payload = tinyrtc_rtp_get_payload(packet, len, &header);
-    if (payload == NULL) {
-        return TINYRTC_ERROR;
+    uint8_t frame_buffer[4096];
+    size_t frame_len = 0;
+    bool frame_complete = tinyrtc_depacketize_frame(
+        matched->codec_id, packet, len, frame_buffer, sizeof(frame_buffer), &frame_len);
+
+    if (frame_len > 0) {
+        if (matched->codec_id == TINYRTC_CODEC_H264) {
+            if (matched->reassembly_active &&
+                matched->reassembly_timestamp != header.timestamp &&
+                matched->reassembly_len > 0) {
+                track_reset_reassembly(matched);
+            }
+
+            if (!matched->reassembly_active) {
+                matched->reassembly_timestamp = header.timestamp;
+                matched->reassembly_active = true;
+            }
+
+            if (!track_append_reassembly(matched, frame_buffer, frame_len)) {
+                track_reset_reassembly(matched);
+                return TINYRTC_ERROR_MEMORY;
+            }
+        }
     }
 
-    size_t payload_len = len - (size_t)(payload - packet);
-    bool frame_complete = tinyrtc_depacketize_frame(
-        packet, len, frame_buffer, sizeof(frame_buffer), &frame_len);
-
     if (frame_complete) {
+        const uint8_t *callback_frame = frame_buffer;
+        size_t callback_len = frame_len;
+
+        if (matched->codec_id == TINYRTC_CODEC_H264) {
+            callback_frame = matched->reassembly_buffer;
+            callback_len = matched->reassembly_len;
+        }
+
         matched->frames_received++;
 
         /* Notify application via callback */
@@ -893,17 +1002,21 @@ tinyrtc_error_t pc_process_incoming_rtp(
             pc->config.observer.on_audio_frame(
                 pc->config.observer.user_data,
                 matched,
-                frame_buffer,
-                frame_len,
+                callback_frame,
+                callback_len,
                 header.timestamp);
         } else if (matched->kind == TINYRTC_TRACK_KIND_VIDEO &&
                    pc->config.observer.on_video_frame != NULL) {
             pc->config.observer.on_video_frame(
                 pc->config.observer.user_data,
                 matched,
-                frame_buffer,
-                frame_len,
+                callback_frame,
+                callback_len,
                 header.timestamp);
+        }
+
+        if (matched->codec_id == TINYRTC_CODEC_H264) {
+            track_reset_reassembly(matched);
         }
     }
 

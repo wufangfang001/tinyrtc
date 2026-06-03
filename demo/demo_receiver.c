@@ -47,6 +47,11 @@ static FILE *g_audio_file = NULL;
 static FILE *g_video_file = NULL;
 static char g_audio_output_path[64] = "output_audio.bin";
 static char g_video_output_path[64] = "output_video.h264";
+static int g_max_video_frames = 0;
+static bool g_should_exit = false;
+static tinyrtc_peer_connection_t *g_pc = NULL;
+static bool g_got_offer = false;
+static char *g_pending_offer = NULL;
 
 static const char *demo_audio_extension_for_codec(tinyrtc_codec_id_t codec_id)
 {
@@ -126,12 +131,10 @@ static void on_video_frame(void *user_data, tinyrtc_track_t *track,
         aosl_log(AOSL_LOG_INFO, "Received video frame #%d, size=%zu bytes, ts=%u, saved to file\n",
                 g_video_frame_count, frame_len, timestamp);
     }
+    if (g_max_video_frames > 0 && g_video_frame_count >= g_max_video_frames && g_pc != NULL) {
+        g_should_exit = true;
+    }
 }
-
-/* Global for signaling callback */
-static tinyrtc_peer_connection_t *g_pc = NULL;
-static bool g_got_offer = false;
-static char *g_pending_offer = NULL;
 
 static void signaling_callback(tinyrtc_signal_event_t *event, void *user_data)
 {
@@ -174,6 +177,7 @@ static void print_usage(const char *prog_name)
     printf("  --room <room-id>        Use automatic signaling with specified room ID\n");
     printf("  --server <url>          Signaling server URL (default: ws://localhost:8765)\n");
     printf("  --no-verify             Skip SSL certificate verification (for self-signed certs)\n");
+    printf("  --max-video-frames <count>  Exit after receiving the given number of video frames\n");
     printf("\n");
     printf("Examples:\n");
     printf("  Automatic mode: %s --room my-room --server ws://your-server-ip:8765\n", prog_name);
@@ -195,6 +199,10 @@ int main(int argc, char **argv)
         }
         if (strcmp(argv[i], "--no-verify") == 0 || strcmp(argv[i], "-k") == 0) {
             disable_cert_verify = true;
+        }
+        if (strcmp(argv[i], "--max-video-frames") == 0 && i + 1 < argc) {
+            g_max_video_frames = atoi(argv[i+1]);
+            i++;
         }
     }
 
@@ -292,7 +300,8 @@ int main(int argc, char **argv)
         aosl_log(AOSL_LOG_INFO, "Open the sdp-transfer browser demo and enter room-id: %s\n", room_id);
 
         /* Poll until we get an offer */
-        while (!g_got_offer && tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
+        while (!g_got_offer && !g_should_exit &&
+               tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
             tinyrtc_process_events(ctx, 100);
             tinyrtc_signaling_process(sig);
             aosl_msleep(100);
@@ -341,7 +350,7 @@ int main(int argc, char **argv)
         tinyrtc_free(answer_sdp);
 
         /* Main loop */
-        while (tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
+        while (!g_should_exit && tinyrtc_peer_connection_get_state(pc) != TINYRTC_PC_STATE_CLOSED) {
             tinyrtc_process_events(ctx, 10);
             tinyrtc_signaling_process(sig);
             aosl_msleep(10);

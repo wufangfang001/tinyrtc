@@ -43,6 +43,11 @@ struct tinyrtc_track {
 
     /* For receiving: jitter buffer */
     tinyrtc_jitter_buffer_t *jitter_buffer;
+    uint8_t *reassembly_buffer;
+    size_t reassembly_len;
+    size_t reassembly_capacity;
+    uint32_t reassembly_timestamp;
+    bool reassembly_active;
 
     /* Statistics */
     uint64_t frames_sent;
@@ -87,7 +92,8 @@ struct tinyrtc_peer_connection {
 
     /* SRTP keys (filled after DTLS completes) */
     bool srtp_initialized;
-    srtp_context_t *srtp;             /* SRTP context */
+    srtp_context_t *srtp;             /* SRTP send context */
+    srtp_context_t *srtp_rx;          /* SRTP receive context */
 
     /* Mutex for state protection */
     aosl_lock_t mutex;
@@ -158,7 +164,7 @@ tinyrtc_error_t pc_set_remote_description(tinyrtc_peer_connection_t *pc,
  */
 tinyrtc_error_t pc_process_incoming_rtp(
     tinyrtc_peer_connection_t *pc,
-    const uint8_t *packet,
+    uint8_t *packet,
     size_t len);
 
 /**

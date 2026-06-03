@@ -250,6 +250,7 @@ size_t tinyrtc_rtcp_build_receiver_report(
  * @brief Codec parameters for packetization
  */
 typedef struct {
+    tinyrtc_codec_id_t codec_id;
     int payload_type;
     uint32_t mtu;             /**< Maximum transmission unit */
 } tinyrtc_codec_packetization_t;
@@ -265,8 +266,9 @@ typedef struct {
  * @return Number of packets created
  */
 typedef void (*tinyrtc_packet_callback_t)(
-    const uint8_t *packet,
-    size_t packet_len,
+    const uint8_t *payload,
+    size_t payload_len,
+    bool marker,
     void *user_data);
 
 int tinyrtc_packetize_frame(
@@ -287,6 +289,7 @@ int tinyrtc_packetize_frame(
  * @return true if frame is complete
  */
 bool tinyrtc_depacketize_frame(
+    tinyrtc_codec_id_t codec_id,
     const uint8_t *packet,
     size_t len,
     uint8_t *frame_buffer,

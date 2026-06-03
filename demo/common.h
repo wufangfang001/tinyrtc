@@ -33,6 +33,21 @@ char *demo_read_sdp(const char *path);
  */
 int demo_write_sdp(const char *path, const char *sdp);
 
+typedef struct {
+    uint8_t *data;
+    size_t len;
+} demo_h264_access_unit_t;
+
+typedef struct {
+    demo_h264_access_unit_t *units;
+    size_t count;
+    size_t current_index;
+} demo_h264_stream_t;
+
+int demo_h264_stream_load(const char *path, demo_h264_stream_t *stream);
+void demo_h264_stream_reset(demo_h264_stream_t *stream);
+void demo_h264_stream_free(demo_h264_stream_t *stream);
+
 /**
  * @brief Initialize AOSL for demo
  *

@@ -19,6 +19,12 @@ if ! grep -q -- "--server <url>" <<<"${sender_help}"; then
     exit 1
 fi
 
+if ! grep -q -- "--max-video-frames <count>" <<<"${sender_help}"; then
+    echo "sender help missing --max-video-frames"
+    echo "${sender_help}"
+    exit 1
+fi
+
 if grep -q -- "Manual mode:" <<<"${sender_help}"; then
     echo "sender help still references manual mode"
     echo "${sender_help}"
@@ -33,6 +39,12 @@ fi
 
 if ! grep -q -- "--server <url>" <<<"${recv_help}"; then
     echo "receiver help missing --server"
+    echo "${recv_help}"
+    exit 1
+fi
+
+if ! grep -q -- "--max-video-frames <count>" <<<"${recv_help}"; then
+    echo "receiver help missing --max-video-frames"
     echo "${recv_help}"
     exit 1
 fi

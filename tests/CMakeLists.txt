@@ -12,6 +12,7 @@ set(TEST_SOURCES
     test_jitter_buffer.c
     test_stun.c
     test_signaling.c
+    test_roundtrip.c
 )
 
 add_executable(tinyrtc_tests ${TEST_SOURCES})

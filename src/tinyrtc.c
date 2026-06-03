@@ -55,6 +55,8 @@ static tinyrtc_error_t pc_initialize_srtp_after_dtls(tinyrtc_peer_connection_t *
     unsigned char server_key[16];
     unsigned char client_salt[14];
     unsigned char server_salt[14];
+    srtp_context_t *send_ctx = NULL;
+    srtp_context_t *recv_ctx = NULL;
     tinyrtc_error_t err;
 
     TINYRTC_CHECK(pc != NULL, TINYRTC_ERROR_INVALID_ARG);
@@ -68,16 +70,26 @@ static tinyrtc_error_t pc_initialize_srtp_after_dtls(tinyrtc_peer_connection_t *
     }
 
     if (pc->config.is_initiator) {
-        pc->srtp = srtp_init(client_key, client_salt);
+        send_ctx = srtp_init(client_key, client_salt);
+        recv_ctx = srtp_init(server_key, server_salt);
     } else {
-        pc->srtp = srtp_init(server_key, server_salt);
+        send_ctx = srtp_init(server_key, server_salt);
+        recv_ctx = srtp_init(client_key, client_salt);
     }
 
-    if (pc->srtp == NULL) {
+    if (send_ctx == NULL || recv_ctx == NULL) {
+        if (send_ctx != NULL) {
+            srtp_destroy(send_ctx);
+        }
+        if (recv_ctx != NULL) {
+            srtp_destroy(recv_ctx);
+        }
         TINYRTC_LOG_ERROR("Failed to initialize SRTP");
         return TINYRTC_ERROR_MEMORY;
     }
 
+    pc->srtp = send_ctx;
+    pc->srtp_rx = recv_ctx;
     pc->srtp_initialized = true;
     TINYRTC_LOG_INFO("SRTP initialized successfully, media encryption ready");
     fflush(stdout);
@@ -234,7 +246,7 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
                         events_processed++;
                     } else {
                         /* This is RTP media, process it */
-                        pc_process_incoming_rtp(pc, buffer, len);
+                        (void)pc_process_incoming_rtp(pc, buffer, len);
                         events_processed++;
                     }
                 }

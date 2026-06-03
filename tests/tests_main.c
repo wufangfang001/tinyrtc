@@ -20,8 +20,13 @@ extern int test_dtls_derive_srtp_keys_rejects_missing_master_secret(void);
 extern int test_dtls_start_configures_bio_callbacks(void);
 extern int test_pc_secure_media_ready_requires_srtp(void);
 extern int test_pc_secure_media_ready_rejects_missing_dtls_master_secret(void);
+extern int test_pc_process_incoming_rtp_reassembles_h264_fua_before_callback(void);
+extern int test_track_send_video_frame_rejects_when_secure_media_not_ready(void);
 extern int test_rtp_header_parse(void);
 extern int test_rtp_header_build(void);
+extern int test_rtp_packetize_h264_single_nalu_sets_marker_on_last_packet_only(void);
+extern int test_rtp_packetize_h264_annexb_splits_nalus_and_strips_start_codes(void);
+extern int test_rtp_depacketize_h264_fua_rebuilds_annexb_frame(void);
 extern int test_srtp_encrypt_decrypt_roundtrip(void);
 extern int test_srtp_encrypt_only_writes_truncated_auth_tag(void);
 extern int test_sdp_parse_basic(void);
@@ -33,6 +38,7 @@ extern int test_signaling_parse_string_ice_candidate(void);
 extern int test_signaling_parse_peer_joined_event(void);
 extern int test_signaling_tls_client_config_defaults(void);
 extern int test_peer_connection_create_answer_adds_remote_candidates_to_ice(void);
+extern int test_localhost_h264_roundtrip_delivers_complete_annexb_frame(void);
 
 int main(void) {
     printf("=== TinyRTC Unit Tests ===\n\n");
@@ -48,8 +54,13 @@ int main(void) {
     MINUNIT_RUN_TEST(test_dtls_start_configures_bio_callbacks);
     MINUNIT_RUN_TEST(test_pc_secure_media_ready_requires_srtp);
     MINUNIT_RUN_TEST(test_pc_secure_media_ready_rejects_missing_dtls_master_secret);
+    MINUNIT_RUN_TEST(test_pc_process_incoming_rtp_reassembles_h264_fua_before_callback);
+    MINUNIT_RUN_TEST(test_track_send_video_frame_rejects_when_secure_media_not_ready);
     MINUNIT_RUN_TEST(test_rtp_header_parse);
     MINUNIT_RUN_TEST(test_rtp_header_build);
+    MINUNIT_RUN_TEST(test_rtp_packetize_h264_single_nalu_sets_marker_on_last_packet_only);
+    MINUNIT_RUN_TEST(test_rtp_packetize_h264_annexb_splits_nalus_and_strips_start_codes);
+    MINUNIT_RUN_TEST(test_rtp_depacketize_h264_fua_rebuilds_annexb_frame);
     MINUNIT_RUN_TEST(test_srtp_encrypt_only_writes_truncated_auth_tag);
     MINUNIT_RUN_TEST(test_srtp_encrypt_decrypt_roundtrip);
     MINUNIT_RUN_TEST(test_sdp_parse_basic);
@@ -61,6 +72,7 @@ int main(void) {
     MINUNIT_RUN_TEST(test_signaling_parse_peer_joined_event);
     MINUNIT_RUN_TEST(test_signaling_tls_client_config_defaults);
     MINUNIT_RUN_TEST(test_peer_connection_create_answer_adds_remote_candidates_to_ice);
+    MINUNIT_RUN_TEST(test_localhost_h264_roundtrip_delivers_complete_annexb_frame);
 
     MINUNIT_SUMMARY();
 }
