@@ -226,7 +226,13 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
         /* Check for incoming UDP packets first */
         if (FD_ISSET(pc->ice->socket, &read_fds)) {
             /* Read packet */
-            int len = recv(pc->ice->socket, buffer, sizeof(buffer), 0);
+            struct sockaddr_in source_addr;
+            socklen_t source_len = sizeof(source_addr);
+            int len;
+
+            memset(&source_addr, 0, sizeof(source_addr));
+            len = recvfrom(pc->ice->socket, buffer, sizeof(buffer), 0,
+                           (struct sockaddr *)&source_addr, &source_len);
             if (len > 0) {
                 TINYRTC_LOG_DEBUG("Received UDP packet: %d bytes, first 8 bytes: %02x %02x %02x %02x %02x %02x %02x %02x",
                     len,
@@ -234,12 +240,12 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
                     buffer[4], buffer[5], buffer[6], buffer[7]);
 
                 /* ice_process_packet returns: 0 = STUN packet (handled), 1 = not STUN (media/DTLS) */
-                int is_media = ice_process_packet(pc->ice, buffer, len);
+                int is_media = ice_process_packet(pc->ice, buffer, len, &source_addr);
                 TINYRTC_LOG_DEBUG("  -> packet classification: %s", is_media ? "media/DTLS" : "STUN (handled by ICE)");
 
                 if (is_media) {
                     /* This is media/DTLS packet (not STUN) */
-                    if (pc->dtls != NULL && !pc->srtp_initialized) {
+                    if (pc->dtls != NULL && !pc->srtp_initialized && ice_is_connected(pc->ice)) {
                         /* This is DTLS handshake data - process it */
                         int ret = dtls_process_data(pc->dtls, buffer, len);
                         TINYRTC_LOG_DEBUG("Processed DTLS packet: %d", ret);
@@ -268,13 +274,15 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
             if (pc->dtls == NULL) {
                 dtls_role_t role = pc->config.is_initiator ? DTLS_ROLE_CLIENT : DTLS_ROLE_SERVER;
                 pc->dtls = dtls_init(role);
-                if (pc->dtls != NULL) {
-                    dtls_start(pc->dtls, pc->ice);
-                    TINYRTC_LOG_INFO("DTLS handshake started (role=%s)",
-                        role == DTLS_ROLE_CLIENT ? "client" : "server");
-                } else {
+                if (pc->dtls == NULL) {
                     TINYRTC_LOG_ERROR("Failed to initialize DTLS");
                 }
+            }
+            if (pc->dtls != NULL) {
+                dtls_role_t role = pc->config.is_initiator ? DTLS_ROLE_CLIENT : DTLS_ROLE_SERVER;
+                dtls_start(pc->dtls, pc->ice);
+                TINYRTC_LOG_INFO("DTLS handshake started (role=%s)",
+                    role == DTLS_ROLE_CLIENT ? "client" : "server");
             }
             if (pc->config.observer.on_connection_state_change) {
                 pc->config.observer.on_connection_state_change(
@@ -286,7 +294,7 @@ int tinyrtc_process_events(tinyrtc_context_t *ctx, uint32_t timeout_ms)
         }
 
         /* Process DTLS if DTLS is started */
-        if (pc->dtls != NULL && !pc->srtp_initialized) {
+        if (pc->dtls != NULL && !pc->srtp_initialized && ice_is_connected(pc->ice)) {
             dtls_poll_handshake(pc->dtls);
             int dtls_done = dtls_is_handshake_complete(pc->dtls);
             TINYRTC_LOG_DEBUG("Peer %p: DTLS handshake check done, complete=%d", pc, dtls_done);

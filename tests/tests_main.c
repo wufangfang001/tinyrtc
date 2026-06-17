@@ -30,14 +30,20 @@ extern int test_rtp_depacketize_h264_fua_rebuilds_annexb_frame(void);
 extern int test_srtp_encrypt_decrypt_roundtrip(void);
 extern int test_srtp_encrypt_only_writes_truncated_auth_tag(void);
 extern int test_sdp_parse_basic(void);
+extern int test_sdp_parse_rtpmap_and_candidate(void);
+extern int test_sdp_generate_candidate_uses_webrtc_order(void);
 extern int test_jitter_buffer_basic(void);
 extern int test_stun_parse(void);
+extern int test_stun_finalize_adds_integrity_and_fingerprint(void);
 extern int test_signaling_parse_object_sdp_offer(void);
 extern int test_signaling_parse_object_ice_candidate(void);
 extern int test_signaling_parse_string_ice_candidate(void);
+extern int test_signaling_parse_browser_tcp_ice_candidate(void);
 extern int test_signaling_parse_peer_joined_event(void);
 extern int test_signaling_tls_client_config_defaults(void);
 extern int test_peer_connection_create_answer_adds_remote_candidates_to_ice(void);
+extern int test_peer_connection_create_answer_preserves_offer_media_order_and_mid(void);
+extern int test_peer_connection_ignores_remote_tcp_candidate_for_udp_ice(void);
 extern int test_localhost_h264_roundtrip_delivers_complete_annexb_frame(void);
 
 int main(void) {
@@ -64,14 +70,20 @@ int main(void) {
     MINUNIT_RUN_TEST(test_srtp_encrypt_only_writes_truncated_auth_tag);
     MINUNIT_RUN_TEST(test_srtp_encrypt_decrypt_roundtrip);
     MINUNIT_RUN_TEST(test_sdp_parse_basic);
+    MINUNIT_RUN_TEST(test_sdp_parse_rtpmap_and_candidate);
+    MINUNIT_RUN_TEST(test_sdp_generate_candidate_uses_webrtc_order);
     MINUNIT_RUN_TEST(test_jitter_buffer_basic);
     MINUNIT_RUN_TEST(test_stun_parse);
+    MINUNIT_RUN_TEST(test_stun_finalize_adds_integrity_and_fingerprint);
     MINUNIT_RUN_TEST(test_signaling_parse_object_sdp_offer);
     MINUNIT_RUN_TEST(test_signaling_parse_object_ice_candidate);
     MINUNIT_RUN_TEST(test_signaling_parse_string_ice_candidate);
+    MINUNIT_RUN_TEST(test_signaling_parse_browser_tcp_ice_candidate);
     MINUNIT_RUN_TEST(test_signaling_parse_peer_joined_event);
     MINUNIT_RUN_TEST(test_signaling_tls_client_config_defaults);
     MINUNIT_RUN_TEST(test_peer_connection_create_answer_adds_remote_candidates_to_ice);
+    MINUNIT_RUN_TEST(test_peer_connection_create_answer_preserves_offer_media_order_and_mid);
+    MINUNIT_RUN_TEST(test_peer_connection_ignores_remote_tcp_candidate_for_udp_ice);
     MINUNIT_RUN_TEST(test_localhost_h264_roundtrip_delivers_complete_annexb_frame);
 
     MINUNIT_SUMMARY();

@@ -23,3 +23,28 @@ MINUNIT_TEST(test_stun_parse)
 
     return 0;
 }
+
+MINUNIT_TEST(test_stun_finalize_adds_integrity_and_fingerprint)
+{
+    uint8_t buffer[256];
+    stun_header_t *hdr = (stun_header_t *)buffer;
+    size_t len = sizeof(stun_header_t);
+    tinyrtc_error_t err;
+
+    memset(buffer, 0, sizeof(buffer));
+    hdr->type = htons(STUN_BINDING_REQUEST);
+    hdr->magic_cookie = htonl(STUN_MAGIC_COOKIE);
+
+    err = stun_finalize_message(buffer, &len, sizeof(buffer), "test-password");
+
+    MINUNIT_ASSERT(err == TINYRTC_OK, "Expected STUN finalize to succeed");
+    MINUNIT_ASSERT(len > sizeof(stun_header_t), "Expected STUN finalize to append attributes");
+    MINUNIT_ASSERT(ntohs(hdr->length) == (uint16_t)(len - sizeof(stun_header_t)),
+                   "Expected STUN header length to match finalized message");
+    MINUNIT_ASSERT(memmem(buffer, len, "\x00\x08", 2) != NULL,
+                   "Expected MESSAGE-INTEGRITY attribute");
+    MINUNIT_ASSERT(memmem(buffer, len, "\x80\x28", 2) != NULL,
+                   "Expected FINGERPRINT attribute");
+
+    return 0;
+}

@@ -20,11 +20,6 @@
 #include <string.h>
 #include <unistd.h>
 
-static void on_ice_candidate(void *user_data, tinyrtc_ice_candidate_t *candidate) {
-    aosl_log(AOSL_LOG_INFO, "Got local ICE candidate: %s:%d type=%s\n",
-            candidate->ip, candidate->port, candidate->type);
-}
-
 static void on_connection_state_change(void *user_data, tinyrtc_pc_state_t new_state) {
     static const char *state_names[] = {
         "NEW", "CONNECTING", "CONNECTED", "DISCONNECTED", "FAILED", "CLOSED"
@@ -40,6 +35,20 @@ static void on_track_added(void *user_data, tinyrtc_track_t *track) {
 
 static int g_audio_frame_count = 0;
 static int g_video_frame_count = 0;
+static tinyrtc_signaling_t *g_sig = NULL;
+
+static void on_ice_candidate(void *user_data, tinyrtc_ice_candidate_t *candidate) {
+    (void)user_data;
+    aosl_log(AOSL_LOG_INFO, "Got local ICE candidate: %s:%d type=%s\n",
+            candidate->ip, candidate->port, candidate->type);
+    if (g_sig != NULL) {
+        tinyrtc_error_t err = tinyrtc_signaling_send_candidate(g_sig, NULL, candidate);
+        if (err != TINYRTC_OK) {
+            aosl_log(AOSL_LOG_WARNING, "Failed to send ICE candidate via signaling: %s\n",
+                    tinyrtc_get_error_string(err));
+        }
+    }
+}
 
 static void on_audio_frame(void *user_data, tinyrtc_track_t *track,
                             const uint8_t *frame, size_t frame_len, uint32_t timestamp)
@@ -461,6 +470,7 @@ int main(int argc, char **argv)
         }
 
         aosl_log(AOSL_LOG_INFO, "Connected to signaling server successfully\n");
+        g_sig = sig;
         aosl_log(AOSL_LOG_INFO, "Waiting for peer to join before creating offer...\n");
         char *offer_sdp = NULL;
         aosl_log(AOSL_LOG_INFO, "Starting main loop... (Ctrl+C to exit)\n");
@@ -507,6 +517,7 @@ int main(int argc, char **argv)
         if (offer_sdp) {
             tinyrtc_free(offer_sdp);
         }
+        g_sig = NULL;
         tinyrtc_signaling_destroy(sig);
     } else {
         aosl_log(AOSL_LOG_ERROR, "Manual SDP exchange has been removed. Use sdp-transfer automatic signaling with --room/--server.\n");

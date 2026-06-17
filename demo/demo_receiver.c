@@ -19,10 +19,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void on_ice_candidate(void *user_data, tinyrtc_ice_candidate_t *candidate) {
-    aosl_log(AOSL_LOG_INFO, "Got local ICE candidate: %s:%d type=%s\n", candidate->ip, candidate->port, candidate->type);
-}
-
 static void on_connection_state_change(void *user_data, tinyrtc_pc_state_t new_state) {
     static const char *state_names[] = {
         "NEW", "CONNECTING", "CONNECTED", "DISCONNECTED", "FAILED", "CLOSED"
@@ -52,6 +48,19 @@ static bool g_should_exit = false;
 static tinyrtc_peer_connection_t *g_pc = NULL;
 static bool g_got_offer = false;
 static char *g_pending_offer = NULL;
+static tinyrtc_signaling_t *g_sig = NULL;
+
+static void on_ice_candidate(void *user_data, tinyrtc_ice_candidate_t *candidate) {
+    (void)user_data;
+    aosl_log(AOSL_LOG_INFO, "Got local ICE candidate: %s:%d type=%s\n", candidate->ip, candidate->port, candidate->type);
+    if (g_sig != NULL) {
+        tinyrtc_error_t err = tinyrtc_signaling_send_candidate(g_sig, NULL, candidate);
+        if (err != TINYRTC_OK) {
+            aosl_log(AOSL_LOG_WARNING, "Failed to send ICE candidate via signaling: %s\n",
+                    tinyrtc_get_error_string(err));
+        }
+    }
+}
 
 static const char *demo_audio_extension_for_codec(tinyrtc_codec_id_t codec_id)
 {
@@ -230,7 +239,7 @@ int main(int argc, char **argv)
 
     /* Configure peer connection */
     tinyrtc_pc_config_t pc_config = {0};
-    pc_config.stun_server = NULL;  // No STUN needed for localhost testing
+    pc_config.stun_server = "stun:stun.l.google.com:19302";
     pc_config.observer.on_ice_candidate = on_ice_candidate;
     pc_config.observer.on_connection_state_change = on_connection_state_change;
     pc_config.observer.on_track_added = on_track_added;
@@ -298,6 +307,7 @@ int main(int argc, char **argv)
 
         aosl_log(AOSL_LOG_INFO, "Connected to signaling server, waiting for offer...\n");
         aosl_log(AOSL_LOG_INFO, "Open the sdp-transfer browser demo and enter room-id: %s\n", room_id);
+        g_sig = sig;
 
         /* Poll until we get an offer */
         while (!g_got_offer && !g_should_exit &&
@@ -356,6 +366,7 @@ int main(int argc, char **argv)
             aosl_msleep(10);
         }
 
+        g_sig = NULL;
         tinyrtc_signaling_destroy(sig);
     } else {
         aosl_log(AOSL_LOG_INFO, "Usage:\n");

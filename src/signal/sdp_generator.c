@@ -86,6 +86,28 @@ tinyrtc_error_t sdp_generate(const sdp_session_t *session, char **out_text)
         SDP_APPEND_LINE(buf, buf_size, offset, "a=setup:%s", session->dtls_setup);
     }
 
+    if (session->num_media > 0) {
+        bool have_all_mids = true;
+
+        for (int i = 0; i < session->num_media; i++) {
+            if (session->media[i].mid[0] == '\0') {
+                have_all_mids = false;
+                break;
+            }
+        }
+
+        if (have_all_mids) {
+            size_t line_offset = offset;
+            offset += snprintf(buf + offset, buf_size - offset, "a=group:BUNDLE");
+            for (int i = 0; i < session->num_media; i++) {
+                offset += snprintf(buf + offset, buf_size - offset, " %s", session->media[i].mid);
+            }
+            offset += snprintf(buf + offset, buf_size - offset, "\r\n");
+        }
+    }
+
+    SDP_APPEND_LINE(buf, buf_size, offset, "a=ice-options:trickle");
+
     /* Media descriptions */
     for (int i = 0; i < session->num_media; i++) {
         const sdp_media_t *media = &session->media[i];
@@ -94,17 +116,27 @@ tinyrtc_error_t sdp_generate(const sdp_session_t *session, char **out_text)
         int payload = media->payload_type;
         const char *codec_name = tinyrtc_codec_get_name(media->codec_id);
 
-        SDP_APPEND_LINE(buf, buf_size, offset, "m=%s %d RTP/SAVPF %d",
+        SDP_APPEND_LINE(buf, buf_size, offset, "m=%s %d UDP/TLS/RTP/SAVPF %d",
             media_name, media->port, payload);
 
-        /* a=rtpmap:payload codec clock-rate/channels */
-        SDP_APPEND_LINE(buf, buf_size, offset, "a=rtpmap:%d %s %u/%d",
-            payload, codec_name, media->clock_rate, media->channels);
+        /* a=rtpmap:payload codec/clock-rate[/channels] */
+        if (media->kind == TINYRTC_TRACK_KIND_AUDIO && media->channels > 1) {
+            SDP_APPEND_LINE(buf, buf_size, offset, "a=rtpmap:%d %s/%u/%d",
+                payload, codec_name, media->clock_rate, media->channels);
+        } else if (media->kind == TINYRTC_TRACK_KIND_AUDIO) {
+            SDP_APPEND_LINE(buf, buf_size, offset, "a=rtpmap:%d %s/%u/1",
+                payload, codec_name, media->clock_rate);
+        } else {
+            SDP_APPEND_LINE(buf, buf_size, offset, "a=rtpmap:%d %s/%u",
+                payload, codec_name, media->clock_rate);
+        }
 
         /* a=mid:... */
         if (media->mid[0] != '\0') {
             SDP_APPEND_LINE(buf, buf_size, offset, "a=mid:%s", media->mid);
         }
+
+        SDP_APPEND_LINE(buf, buf_size, offset, "a=rtcp-mux");
 
         /* Direction attributes */
         if (media->direction_send && media->direction_recv) {
@@ -126,9 +158,9 @@ tinyrtc_error_t sdp_generate(const sdp_session_t *session, char **out_text)
     for (int i = 0; i < session->num_candidates; i++) {
         const sdp_candidate_t *cand = &session->candidates[i];
         SDP_APPEND_LINE(buf, buf_size, offset,
-            "a=candidate:%s 1 %u %s %d %s %s",
-            cand->foundation, cand->priority, cand->ip, cand->port,
-            cand->type, cand->protocol);
+            "a=candidate:%s 1 %s %u %s %d typ %s",
+            cand->foundation, cand->protocol, cand->priority, cand->ip, cand->port,
+            cand->type);
     }
 
     /* End of SDP, null terminate */

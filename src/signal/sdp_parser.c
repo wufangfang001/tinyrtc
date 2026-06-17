@@ -50,8 +50,8 @@ static int copy_until(char *dst, size_t dst_len, const char **start, char sep)
     const char *p = *start;
     p = skip_whitespace(p);
     size_t i = 0;
-    while (*p != '\0' && *p != '\n' && *p != '\r' && *p != sep && i < dst_len - 1) {
-        if (*p != ' ' || i > 0) { /* Skip leading space */
+    while (*p != '\0' && *p != '\n' && *p != '\r' && *p != sep) {
+        if ((*p != ' ' || i > 0) && i < dst_len - 1) { /* Skip leading space */
             dst[i++] = *p;
         }
         p++;
@@ -99,8 +99,8 @@ static int parse_uint64(const char *str, uint64_t *out)
  */
 static int parse_candidate(const char *line, sdp_candidate_t *cand)
 {
-    /* candidate format: foundation component-id priority ip port transport typ [raddr rport] tcptype */
-    int component_id;
+    /* candidate format: foundation component-id transport priority ip port typ type [raddr rport] [tcptype] */
+    char token[32];
 
     /* foundation */
     copy_until(cand->foundation, sizeof(cand->foundation), &line, ' ');
@@ -117,11 +117,17 @@ static int parse_candidate(const char *line, sdp_candidate_t *cand)
     }
     (void)comp; /* We only care about component 1 for RTP */
 
+    /* protocol (udp/tcp) */
+    copy_until(cand->protocol, sizeof(cand->protocol), &line, ' ');
+    if (cand->protocol[0] == '\0') {
+        strcpy(cand->protocol, "udp");
+    }
+
     /* priority */
     char prio_str[32];
     copy_until(prio_str, sizeof(prio_str), &line, ' ');
-    unsigned long prio;
-    if (parse_int(prio_str, (int *)&prio) != 0) {
+    unsigned long prio = strtoul(prio_str, NULL, 10);
+    if (prio == 0 && prio_str[0] != '0') {
         return -1;
     }
     cand->priority = (uint32_t)prio;
@@ -142,10 +148,10 @@ static int parse_candidate(const char *line, sdp_candidate_t *cand)
     }
     cand->port = (uint16_t)port;
 
-    /* protocol (udp/tcp) */
-    copy_until(cand->protocol, sizeof(cand->protocol), &line, ' ');
-    if (cand->protocol[0] == '\0') {
-        strcpy(cand->protocol, "udp");
+    /* candidate type tag should be "typ" */
+    copy_until(token, sizeof(token), &line, ' ');
+    if (strcmp(token, "typ") != 0) {
+        return -1;
     }
 
     /* type (host/srflx/relay) */
@@ -261,10 +267,13 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                 const char *line_start = p;
                 copy_until(attr_name, sizeof(attr_name), &p, ':');
                 if (strcmp(attr_name, "ice-ufrag") == 0) {
+                    if (*p == ':') p++;
                     copy_until(session->ice_ufrag, sizeof(session->ice_ufrag), &p, '\n');
                 } else if (strcmp(attr_name, "ice-pwd") == 0) {
+                    if (*p == ':') p++;
                     copy_until(session->ice_pwd, sizeof(session->ice_pwd), &p, '\n');
                 } else if (strcmp(attr_name, "fingerprint") == 0) {
+                    if (*p == ':') p++;
                     parse_fingerprint(p, session->fingerprint_type,
                                      sizeof(session->fingerprint_type),
                                      session->fingerprint,
@@ -272,11 +281,15 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                 } else if (strcmp(attr_name, "candidate") == 0) {
                     if (session->num_candidates < SDP_MAX_CANDIDATES) {
                         sdp_candidate_t *cand = &session->candidates[session->num_candidates];
+                        if (*p == ':') {
+                            p++;
+                        }
                         if (parse_candidate(p, cand) == 0) {
                             session->num_candidates++;
                         }
                     }
                 } else if (strcmp(attr_name, "setup") == 0) {
+                    if (*p == ':') p++;
                     copy_until(session->dtls_setup, sizeof(session->dtls_setup), &p, '\n');
                 } else if (strcmp(attr_name, "mid") == 0) {
                     /* a=mid:<mid-value> - set mid for current media track */
@@ -293,10 +306,9 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                 } else if (strcmp(attr_name, "rtpmap") == 0) {
                     /* Parse rtpmap: a=rtpmap:<payload-type> <codec-name>/<clock-rate>[/<channels>] */
                     int pt;
-                    char codec_info[128];
                     char codec_name[64];
-                    char clock_rate_str[32];
-                    uint32_t clock_rate;
+                    char encoding_params[64];
+                    uint32_t clock_rate = 0;
                     int channels = 1;
 
                     /* Skip the ':' */
@@ -308,22 +320,21 @@ tinyrtc_error_t sdp_parse(const char *text, sdp_session_t *session)
                         while (*p != ' ' && *p != '\0' && *p != '\n') p++;
                         if (*p == ' ') p++;
 
-                        /* Format: <codec-name> <clock-rate>[/<channels>] */
-                        /* First, copy codec name (up to space) */
-                        copy_until(codec_name, sizeof(codec_name), &p, ' ');
+                        /* Format: <codec-name>/<clock-rate>[/<channels>] */
+                        copy_until(codec_name, sizeof(codec_name), &p, '/');
+                        if (*p == '/') {
+                            p++;
+                        }
+                        copy_until(encoding_params, sizeof(encoding_params), &p, '\n');
 
-                        /* Then copy clock rate and channels info */
-                        char rate_channels[64];
-                        copy_until(rate_channels, sizeof(rate_channels), &p, '\n');
-
-                        /* Split rate_channels by / */
-                        char *slash = strchr(rate_channels, '/');
+                        /* Split clock-rate/channels */
+                        char *slash = strchr(encoding_params, '/');
                         if (slash) {
                             *slash = '\0';
-                            clock_rate = (uint32_t)atoi(rate_channels);
+                            clock_rate = (uint32_t)atoi(encoding_params);
                             channels = atoi(slash + 1);
                         } else {
-                            clock_rate = (uint32_t)atoi(rate_channels);
+                            clock_rate = (uint32_t)atoi(encoding_params);
                         }
 
                         /* Find matching media track and update codec info */

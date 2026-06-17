@@ -1377,7 +1377,7 @@ tinyrtc_error_t tinyrtc_signaling_send_offer(
     sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
 
     int len = snprintf(json, sizeof(json),
-        "{\"type\": \"offer\", \"sdp\": \"%s\"}",
+        "{\"type\": \"offer\", \"sdp\": {\"type\": \"offer\", \"sdp\": \"%s\"}}",
         escaped_sdp
     );
 
@@ -1410,7 +1410,7 @@ tinyrtc_error_t tinyrtc_signaling_send_answer(
     sig_json_escape(sdp, escaped_sdp, sizeof(escaped_sdp));
 
     int len = snprintf(json, sizeof(json),
-        "{\"type\": \"answer\", \"sdp\": \"%s\"}",
+        "{\"type\": \"answer\", \"sdp\": {\"type\": \"answer\", \"sdp\": \"%s\"}}",
         escaped_sdp
     );
 
@@ -1431,14 +1431,34 @@ tinyrtc_error_t tinyrtc_signaling_send_candidate(
     tinyrtc_ice_candidate_t *candidate)
 {
     (void)to_client_id;
-    (void)candidate;
+    char json[2048];
+    int len;
 
     if (!sig || sig->state != TINYRTC_SIGNALING_CONNECTED || !candidate) {
         return TINYRTC_ERROR_INVALID_ARG;
     }
 
-    /* TODO: implement when we have full ICE candidate support in TinyRTC */
-    aosl_log(AOSL_LOG_DEBUG, "Signaling: ICE candidate sending not implemented yet\n");
+    len = snprintf(json, sizeof(json),
+        "{\"type\": \"ice-candidate\", \"candidate\": {"
+        "\"candidate\": \"candidate:%s 1 %s %u %s %u typ %s\", "
+        "\"sdpMid\": \"0\", \"sdpMLineIndex\": 0}}",
+        candidate->foundation ? candidate->foundation : "tiny",
+        candidate->protocol ? candidate->protocol : "udp",
+        candidate->priority,
+        candidate->ip ? candidate->ip : "0.0.0.0",
+        candidate->port,
+        candidate->type ? candidate->type : "host");
+
+    if (len < 0 || len >= (int)sizeof(json)) {
+        return TINYRTC_ERROR_MEMORY;
+    }
+
+    if (sig_send_ws_frame(sig, WS_OPCODE_TEXT, (const uint8_t *)json, (size_t)len) != 0) {
+        return TINYRTC_ERROR_NETWORK;
+    }
+
+    aosl_log(AOSL_LOG_DEBUG, "Signaling: sent ICE candidate %s:%u\n",
+        candidate->ip ? candidate->ip : "(null)", candidate->port);
     return TINYRTC_OK;
 }
 

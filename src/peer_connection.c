@@ -9,6 +9,7 @@
  */
 
 #include <stdio.h>
+#include <inttypes.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -71,6 +72,40 @@ static bool track_append_reassembly(tinyrtc_track_t *track, const uint8_t *data,
     memcpy(track->reassembly_buffer + track->reassembly_len, data, len);
     track->reassembly_len += len;
     return true;
+}
+
+static void pc_generate_local_ice_credentials(sdp_session_t *session)
+{
+    char ufrag[32];
+    char pwd[64];
+    uint64_t now = (uint64_t)aosl_time_ms();
+
+    snprintf(ufrag, sizeof(ufrag), "tiny%" PRIu64, now);
+    snprintf(pwd, sizeof(pwd), "rtc%" PRIu64 "random", now + 12345);
+
+    strcpy(session->ice_ufrag, ufrag);
+    strcpy(session->ice_pwd, pwd);
+}
+
+static void pc_ensure_local_dtls_material(tinyrtc_peer_connection_t *pc,
+                                          sdp_session_t *session)
+{
+    char fingerprint[DTLS_FINGERPRINT_MAX_LEN * 3];
+
+    if (pc->dtls == NULL) {
+        dtls_role_t role = pc->config.is_initiator ? DTLS_ROLE_CLIENT : DTLS_ROLE_SERVER;
+        pc->dtls = dtls_init(role);
+    }
+
+    if (pc->dtls == NULL) {
+        return;
+    }
+
+    if (dtls_get_fingerprint(pc->dtls, fingerprint, sizeof(fingerprint)) > 0) {
+        strcpy(session->fingerprint_type, "sha-256");
+        strncpy(session->fingerprint, fingerprint, sizeof(session->fingerprint) - 1);
+        session->fingerprint[sizeof(session->fingerprint) - 1] = '\0';
+    }
 }
 
 tinyrtc_peer_connection_t *tinyrtc_peer_connection_create(
@@ -371,18 +406,11 @@ tinyrtc_error_t tinyrtc_peer_connection_create_offer(
     offer.start_time = 0;
     offer.stop_time = 0;
 
-    /* Generate random ICE credentials when available
-     * TODO: use proper random when we get aosl_random */
-    char ufrag[32];
-    char pwd[64];
-    uint64_t now = (uint64_t)aosl_time_ms();
-    snprintf(ufrag, sizeof(ufrag), "tiny%" PRIu64, now);
-    snprintf(pwd, sizeof(pwd), "rtc%" PRIu64 "random", now + 12345);
-    strcpy(offer.ice_ufrag, ufrag);
-    strcpy(offer.ice_pwd, pwd);
+    pc_generate_local_ice_credentials(&offer);
 
     /* DTLS setup: actpass by default */
     strcpy(offer.dtls_setup, "actpass");
+    pc_ensure_local_dtls_material(pc, &offer);
 
     /* Add all local tracks to the offer */
     for (int i = 0; i < pc->num_local_tracks; i++) {
@@ -582,16 +610,9 @@ tinyrtc_error_t tinyrtc_peer_connection_create_answer(
     answer.start_time = 0;
     answer.stop_time = 0;
 
-    /* Copy ICE credentials from local */
-    strcpy(answer.ice_ufrag, pc->local_sdp.ice_ufrag);
-    strcpy(answer.ice_pwd, pc->local_sdp.ice_pwd);
-
-    /* DTLS fingerprint copied from local, setup is active */
-    if (pc->local_sdp.fingerprint[0] != '\0') {
-        strcpy(answer.fingerprint_type, pc->local_sdp.fingerprint_type);
-        strcpy(answer.fingerprint, pc->local_sdp.fingerprint);
-    }
+    pc_generate_local_ice_credentials(&answer);
     strcpy(answer.dtls_setup, "active");
+    pc_ensure_local_dtls_material(pc, &answer);
 
     /* Match local tracks to remote offer and answer */
     for (int i = 0; i < pc->remote_sdp.num_media; i++) {
@@ -610,11 +631,12 @@ tinyrtc_error_t tinyrtc_peer_connection_create_answer(
 
         if (matched != NULL) {
             tinyrtc_track_config_t cfg = {0};
-            cfg.kind = matched->kind;
-            cfg.codec_id = matched->codec_id;
-            cfg.payload_type = matched->payload_type;
-            cfg.clock_rate = matched->clock_rate;
-            cfg.mid = matched->mid;
+            cfg.kind = remote_media->kind;
+            cfg.codec_id = remote_media->codec_id;
+            cfg.payload_type = remote_media->payload_type;
+            cfg.clock_rate = remote_media->clock_rate;
+            cfg.channels = remote_media->channels;
+            cfg.mid = remote_media->mid;
             sdp_add_media(&answer, &cfg);
         }
         /* If no match, still create media entry but it will be inactive */
@@ -698,6 +720,13 @@ tinyrtc_error_t tinyrtc_peer_connection_add_ice_candidate(
     sdp_cand.is_ipv6 = candidate->is_ipv6;
 
     aosl_lock_lock(pc->mutex);
+
+    if (candidate->protocol != NULL && strcasecmp(candidate->protocol, "udp") != 0) {
+        aosl_lock_unlock(pc->mutex);
+        TINYRTC_LOG_INFO("Skipping remote ICE candidate with unsupported protocol %s",
+            candidate->protocol);
+        return TINYRTC_OK;
+    }
 
     int added = sdp_add_candidate(&pc->remote_sdp, candidate);
     if (added >= 0 && pc->ice != NULL) {

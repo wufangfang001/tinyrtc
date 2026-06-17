@@ -15,6 +15,7 @@
 #include "sdp_internal.h"
 #include "media.h"
 #include "tinyrtc/peer_connection.h"
+#include <netinet/in.h>
 
 /* STUN constants and types */
 #define STUN_MAGIC_COOKIE 0x2112A442
@@ -87,6 +88,8 @@ typedef struct {
     bool succeeded;
     uint64_t last_ping_ms;
     int rtt;
+    uint8_t last_transaction_id[12];
+    bool last_transaction_id_valid;
 } ice_check_pair_t;
 
 /* =============================================================================
@@ -105,6 +108,8 @@ typedef struct {
     ice_check_pair_t *selected_pair;
     int socket;       /* UDP socket for ICE connectivity checks (int fd) */
     bool gathering_complete;
+    uint8_t stun_server_transaction_id[12];
+    bool stun_server_transaction_id_valid;
 } ice_session_t;
 
 /* =============================================================================
@@ -140,6 +145,18 @@ tinyrtc_error_t stun_process_response(ice_session_t *ice,
                                        uint16_t *mapped_port);
 
 /**
+ * @brief Finalize a STUN message with MESSAGE-INTEGRITY and FINGERPRINT
+ *
+ * @param buffer Message buffer containing the STUN header and preceding attrs
+ * @param[in,out] len Current length; updated to final message length
+ * @param buf_size Buffer capacity
+ * @param password Short-term credential password for HMAC-SHA1
+ * @return TINYRTC_OK on success
+ */
+tinyrtc_error_t stun_finalize_message(uint8_t *buffer, size_t *len, size_t buf_size,
+                                      const char *password);
+
+/**
  * @brief Create STUN binding response to response to connectivity check
  *
  * @param buffer Output buffer
@@ -148,7 +165,9 @@ tinyrtc_error_t stun_process_response(ice_session_t *ice,
  * @return Size of created response
  */
 size_t stun_create_binding_response(uint8_t *buffer, size_t buf_size,
-                                     stun_header_t *request_header);
+                                     stun_header_t *request_header,
+                                     const struct sockaddr_in *mapped_addr,
+                                     const char *password);
 
 /* =============================================================================
  * ICE functions
@@ -199,7 +218,8 @@ tinyrtc_error_t ice_add_remote_candidate(ice_session_t *ice,
  * @param len Packet length
  * @return 0 if handled as STUN, 1 if it's media packet
  */
-int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len);
+int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len,
+                       const struct sockaddr_in *source_addr);
 
 /**
  * @brief Check for ICE connectivity

@@ -20,6 +20,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <unistd.h>
 
 /* STUN helper functions */
@@ -107,6 +109,53 @@ static uint32_t ice_calculate_priority(ice_candidate_type_t type)
             break;
     }
     return (type_pref << 24) | (0 << 8) | 255;
+}
+
+static void ice_add_local_candidate(ice_session_t *ice,
+                                    const char *ip,
+                                    uint16_t port,
+                                    uint32_t priority)
+{
+    ice_candidate_internal_t *cand;
+
+    if (ice == NULL || ip == NULL || ice->num_local_candidates >= ICE_MAX_CANDIDATES) {
+        return;
+    }
+
+    for (int i = 0; i < ice->num_local_candidates; i++) {
+        if (strcmp(ice->local[i].ip, ip) == 0 && ice->local[i].port == port) {
+            return;
+        }
+    }
+
+    cand = &ice->local[ice->num_local_candidates];
+    memset(cand, 0, sizeof(*cand));
+    cand->type = ICE_CANDIDATE_TYPE_HOST;
+    strncpy(cand->ip, ip, sizeof(cand->ip) - 1);
+    cand->port = port;
+    strcpy(cand->protocol, "udp");
+    cand->is_ipv6 = strchr(ip, ':') != NULL;
+    cand->priority = priority;
+    cand->selected = false;
+    ice->num_local_candidates++;
+}
+
+static void ice_add_check_pairs_for_local_candidate(ice_session_t *ice,
+                                                    ice_candidate_internal_t *local)
+{
+    if (ice == NULL || local == NULL) {
+        return;
+    }
+
+    for (int i = 0; i < ice->num_remote_candidates; i++) {
+        if (ice->num_check_pairs >= ICE_MAX_CANDIDATES * ICE_MAX_CANDIDATES) {
+            return;
+        }
+        ice_check_pair_t *pair = &ice->check_pairs[ice->num_check_pairs++];
+        memset(pair, 0, sizeof(*pair));
+        pair->local = local;
+        pair->remote = &ice->remote[i];
+    }
 }
 
 /* =============================================================================
@@ -199,33 +248,40 @@ tinyrtc_error_t ice_start_gathering(ice_session_t *ice, const char *stun_url)
     int ret_getname = getsockname((int)sock, (struct sockaddr *)&bound_addr, &addr_len);
     uint16_t local_port = ntohs(bound_addr.sin_port);
 
-    /* Add a local host candidate on 127.0.0.1 (localhost testing) */
-    ice_candidate_internal_t *cand = &ice->local[ice->num_local_candidates];
-    memset(cand, 0, sizeof(*cand));
-    cand->type = ICE_CANDIDATE_TYPE_HOST;
-    strcpy(cand->ip, "127.0.0.1");
-    cand->port = local_port;
-    strcpy(cand->protocol, "udp");
-    cand->is_ipv6 = false;
-    cand->priority = ICE_PRIORITY_HOST;
-    cand->selected = false;
-    ice->num_local_candidates++;
+    {
+        struct ifaddrs *ifaddr = NULL;
+        struct ifaddrs *ifa;
 
-    /* Also add 0.0.0.0 for compatibility */
-    if (ice->num_local_candidates < ICE_MAX_CANDIDATES) {
-        ice_candidate_internal_t *cand2 = &ice->local[ice->num_local_candidates];
-        memset(cand2, 0, sizeof(*cand2));
-        cand2->type = ICE_CANDIDATE_TYPE_HOST;
-        strcpy(cand2->ip, "0.0.0.0");
-        cand2->port = local_port;
-        strcpy(cand2->protocol, "udp");
-        cand2->is_ipv6 = false;
-        cand2->priority = ICE_PRIORITY_HOST - 1000;
-        cand2->selected = false;
-        ice->num_local_candidates++;
+        if (getifaddrs(&ifaddr) == 0) {
+            for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+                char ip[INET_ADDRSTRLEN];
+                struct sockaddr_in *sin;
+
+                if (ifa->ifa_addr == NULL || ifa->ifa_addr->sa_family != AF_INET) {
+                    continue;
+                }
+                if ((ifa->ifa_flags & IFF_UP) == 0 || (ifa->ifa_flags & IFF_LOOPBACK) != 0) {
+                    continue;
+                }
+
+                sin = (struct sockaddr_in *)ifa->ifa_addr;
+                if (inet_ntop(AF_INET, &sin->sin_addr, ip, sizeof(ip)) == NULL) {
+                    continue;
+                }
+                ice_add_local_candidate(ice, ip, local_port,
+                                        ICE_PRIORITY_HOST - (uint32_t)(ice->num_local_candidates * 10));
+            }
+            freeifaddrs(ifaddr);
+        }
     }
 
-    TINYRTC_LOG_INFO("Added local host candidate %s:%d", cand->ip, cand->port);
+    if (ice->num_local_candidates == 0) {
+        ice_add_local_candidate(ice, "127.0.0.1", local_port, ICE_PRIORITY_HOST);
+    }
+
+    for (int i = 0; i < ice->num_local_candidates; i++) {
+        TINYRTC_LOG_INFO("Added local host candidate %s:%d", ice->local[i].ip, ice->local[i].port);
+    }
 
     /* If STUN URL is provided, send STUN binding request to get server-reflexive candidate */
     if (stun_url != NULL) {
@@ -267,21 +323,25 @@ tinyrtc_error_t ice_add_remote_candidate(ice_session_t *ice,
         return TINYRTC_ERROR;
     }
 
+    if (strcasecmp(sdp_cand->protocol, "udp") != 0) {
+        TINYRTC_LOG_INFO("Skipping unsupported remote ICE candidate protocol %s for %s:%d",
+            sdp_cand->protocol, sdp_cand->ip, sdp_cand->port);
+        return TINYRTC_OK;
+    }
+
     ice_candidate_internal_t *internal = &ice->remote[ice->num_remote_candidates];
     ice_candidate_from_sdp(sdp_cand, internal);
     ice->num_remote_candidates++;
 
     /* Create check pairs with all local candidates */
     for (int i = 0; i < ice->num_local_candidates; i++) {
-        if (ice->num_check_pairs < ICE_MAX_CANDIDATES * ICE_MAX_CANDIDATES) {
-            ice_check_pair_t *pair = &ice->check_pairs[ice->num_check_pairs];
-            pair->local = &ice->local[i];
-            pair->remote = internal;
-            pair->succeeded = false;
-            pair->last_ping_ms = 0;
-            pair->rtt = 0;
-            ice->num_check_pairs++;
+        if (ice->num_check_pairs >= ICE_MAX_CANDIDATES * ICE_MAX_CANDIDATES) {
+            break;
         }
+        ice_check_pair_t *pair = &ice->check_pairs[ice->num_check_pairs++];
+        memset(pair, 0, sizeof(*pair));
+        pair->local = &ice->local[i];
+        pair->remote = internal;
     }
 
     TINYRTC_LOG_DEBUG("Added remote ICE candidate %s:%d",
@@ -290,7 +350,8 @@ tinyrtc_error_t ice_add_remote_candidate(ice_session_t *ice,
     return TINYRTC_OK;
 }
 
-int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len)
+int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len,
+                       const struct sockaddr_in *source_addr)
 {
     TINYRTC_CHECK(ice != NULL, 0);
     TINYRTC_CHECK(data != NULL, 0);
@@ -315,36 +376,26 @@ int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len)
         /* This is a connectivity check request from remote peer - send binding response */
         /* We need to send binding response back to confirm connectivity */
 
-        /* Get remote address from which we received this packet - actually, we know it from candidate */
-        /* Since we already have the remote candidate, just send a success response */
         uint8_t buffer[512];
-        size_t resp_len = stun_create_binding_response(buffer, sizeof(buffer), hdr);
-
-        /* Send response back to remote candidate */
-        /* Find the candidate that matches the source IP/port we received from */
-        /* We don't have the source address info here though... for direct connections just use the first remote candidate */
-        if (ice->num_remote_candidates > 0) {
-            ice_candidate_internal_t *remote = &ice->remote[0];
-            struct sockaddr_in remote_addr;
-            memset(&remote_addr, 0, sizeof(remote_addr));
-            remote_addr.sin_family = AF_INET;
-            inet_pton(AF_INET, remote->ip, &remote_addr.sin_addr);
-            remote_addr.sin_port = htons(remote->port);
-
+        size_t resp_len = stun_create_binding_response(buffer, sizeof(buffer), hdr,
+                                                       source_addr,
+                                                       ice->pc->local_sdp.ice_pwd);
+        if (source_addr != NULL) {
             int sent = sendto(ice->socket, buffer, resp_len, 0,
-                (struct sockaddr *)&remote_addr, sizeof(remote_addr));
+                (const struct sockaddr *)source_addr, sizeof(*source_addr));
+            char remote_ip[INET_ADDRSTRLEN] = {0};
 
+            inet_ntop(AF_INET, &source_addr->sin_addr, remote_ip, sizeof(remote_ip));
             TINYRTC_LOG_INFO("Sent STUN binding response to %s:%d, %d bytes",
-                remote->ip, remote->port, (int)sent);
+                remote_ip, ntohs(source_addr->sin_port), sent);
 
-            /* Mark this pair as succeeded since we got the request */
             for (int i = 0; i < ice->num_check_pairs; i++) {
-                if (ice->check_pairs[i].remote->port == remote->port &&
-                    strcmp(ice->check_pairs[i].remote->ip, remote->ip) == 0 &&
+                if (ice->check_pairs[i].remote->port == ntohs(source_addr->sin_port) &&
+                    strcmp(ice->check_pairs[i].remote->ip, remote_ip) == 0 &&
                     !ice->check_pairs[i].succeeded) {
                     ice->check_pairs[i].succeeded = true;
                     TINYRTC_LOG_INFO("Connectivity check succeeded (received request) from %s:%d",
-                        remote->ip, remote->port);
+                        remote_ip, ntohs(source_addr->sin_port));
                 }
             }
         }
@@ -354,12 +405,28 @@ int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len)
 
     /* If it's STUN Binding Response - mark connectivity check succeeded */
     if (msg_type == STUN_BINDING_RESPONSE) {
-        TINYRTC_LOG_INFO("Received STUN Binding Response - connectivity check succeeded!");
-        /* Mark pending check pairs as succeeded (first successful pair wins) */
-        for (int i = 0; i < ice->num_check_pairs; i++) {
-            if (!ice->check_pairs[i].succeeded) {
-                ice->check_pairs[i].succeeded = true;
-                TINYRTC_LOG_INFO("Connectivity check succeeded for pair %d", i);
+        bool is_stun_server_response = false;
+        bool matched_pair = false;
+
+        if (ice->stun_server_transaction_id_valid &&
+            memcmp(hdr->transaction_id, ice->stun_server_transaction_id, sizeof(hdr->transaction_id)) == 0) {
+            is_stun_server_response = true;
+            TINYRTC_LOG_INFO("Received STUN Binding Response from STUN server");
+        }
+
+        if (!is_stun_server_response) {
+            for (int i = 0; i < ice->num_check_pairs; i++) {
+                if (ice->check_pairs[i].last_transaction_id_valid &&
+                    memcmp(hdr->transaction_id, ice->check_pairs[i].last_transaction_id,
+                           sizeof(hdr->transaction_id)) == 0) {
+                    ice->check_pairs[i].succeeded = true;
+                    matched_pair = true;
+                    TINYRTC_LOG_INFO("Connectivity check succeeded for pair %d", i);
+                    break;
+                }
+            }
+            if (!matched_pair) {
+                TINYRTC_LOG_WARN("Received STUN Binding Response with unknown transaction ID");
             }
         }
     }
@@ -383,11 +450,26 @@ int ice_process_packet(ice_session_t *ice, const uint8_t *data, size_t len)
             cand->priority = ice_calculate_priority(ICE_CANDIDATE_TYPE_SRFLX);
             cand->selected = false;
             ice->num_local_candidates++;
+            ice_add_check_pairs_for_local_candidate(ice, cand);
 
             TINYRTC_LOG_INFO("Added server reflexive candidate %s:%d from STUN server", mapped_ip, mapped_port);
 
             /* Notify application via callback with new candidate */
-            /* TODO: call pc->config.observer.on_ice_candidate */
+            if (ice->pc != NULL && ice->pc->config.observer.on_ice_candidate != NULL) {
+                sdp_candidate_t sdp_cand;
+                tinyrtc_ice_candidate_t out_cand;
+
+                memset(&sdp_cand, 0, sizeof(sdp_cand));
+                ice_candidate_to_sdp(cand, &sdp_cand);
+                out_cand.foundation = sdp_cand.foundation;
+                out_cand.priority = sdp_cand.priority;
+                out_cand.ip = sdp_cand.ip;
+                out_cand.port = sdp_cand.port;
+                out_cand.type = sdp_cand.type;
+                out_cand.protocol = sdp_cand.protocol;
+                out_cand.is_ipv6 = sdp_cand.is_ipv6;
+                ice->pc->config.observer.on_ice_candidate(ice->pc->config.observer.user_data, &out_cand);
+            }
         }
     }
 
@@ -453,6 +535,8 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             hdr->transaction_id[9] = (extra >> 48) & 0xFF;
             hdr->transaction_id[10] = (extra >> 40) & 0xFF;
             hdr->transaction_id[11] = (extra >> 32) & 0xFF;
+            memcpy(pair->last_transaction_id, hdr->transaction_id, sizeof(hdr->transaction_id));
+            pair->last_transaction_id_valid = true;
 
             len = sizeof(stun_header_t);
 
@@ -462,8 +546,8 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
              * ====================================================================== */
             char username[256];
             snprintf(username, sizeof(username), "%s:%s",
-                ice->pc->local_sdp.ice_ufrag,
-                ice->pc->remote_sdp.ice_ufrag);
+                ice->pc->remote_sdp.ice_ufrag,
+                ice->pc->local_sdp.ice_ufrag);
             size_t username_len = strlen(username);
 
             /* Attribute header: type (2 bytes) + length (2 bytes) */
@@ -487,10 +571,10 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             }
 
             /* ======================================================================
-             * Add ICE-CONTROLLING attribute (we are the initiator)
+             * Add ICE-CONTROLLING / ICE-CONTROLLED attribute
              * ====================================================================== */
             uint64_t tie_breaker = now_stun;
-            attr_type = htons(0x802A);  /* STUN_ATTR_ICE_CONTROLLING */
+            attr_type = htons(ice->pc->config.is_initiator ? 0x802A : 0x8029);
             attr_len = htons(8);
 
             memcpy(buffer + len, &attr_type, 2);
@@ -518,8 +602,10 @@ void ice_check_connectivity(ice_session_t *ice, uint64_t now)
             memcpy(buffer + len, &priority, 4);
             len += 4;
 
-            /* Set STUN message length (excluding header) */
-            hdr->length = htons((uint16_t)(len - sizeof(stun_header_t)));
+            if (stun_finalize_message(buffer, &len, sizeof(buffer), ice->pc->remote_sdp.ice_pwd) != TINYRTC_OK) {
+                TINYRTC_LOG_WARN("Failed to finalize ICE connectivity check STUN message");
+                continue;
+            }
 
             TINYRTC_LOG_DEBUG("  STUN username: %s", username);
 
